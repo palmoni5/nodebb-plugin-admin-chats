@@ -1,64 +1,54 @@
 $(document).ready(function() {
-    $(window).on('action:ajaxify.end', function(ev, data) {
-       
-        // בדיקה שאנחנו בפרופיל ובדיקה שאנחנו אדמין
-        if ((data.tpl_url !== 'account/profile' && ajaxify.data.template.name !== 'account/profile') || !app.user.isAdmin) {
-            return;
-        }
+    
+    // פונקציה להחלפת הטקסט
+    function replaceAdminEmptyStateText() {
+        if (!app.user.isAdmin) return;
 
-        // שינוי: שליפת ה-userslug (השם המופיע בכתובת ה-URL) במקום ה-uid
-        const userSlug = ajaxify.data.userslug || (ajaxify.data.user && ajaxify.data.user.userslug);
-        
-        console.log('[Admin Chats Plugin] Injecting button for User Slug:', userSlug);
+        // מחפש את האלמנט עם הקלאס והטקסט הספציפי
+        $('span.text-muted.text-sm').each(function() {
+            const currentText = $(this).text().trim();
+            // בדיקה אם הטקסט הוא הטקסט המקורי (או חלק ממנו)
+            if (currentText.includes("אין לכם צ'אטים פעילים") || currentText === "אין לכם צ'אטים פעילים.") {
+                $(this).text("אנא בחר צ'אט מסרגל הצד.");
+                $(this).removeClass('text-muted'); // אופציונלי: הופך את הטקסט ליותר בולט
+            }
+        });
+    }
 
-        // שינוי הקישור: שימוש ב-userSlug במקום targetUid
-        const btnHtml = `
-            <li role="presentation">
-                <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="/user/${userSlug}/chats" role="menuitem">
-                    <i class="fa fa-fw fa-eye text-danger"></i> <span>צפה בצ'אטים</span>
-                </a>
-            </li>
-            <li role="presentation" class="dropdown-divider"></li>
-        `;
-
-        const menu = $('.account-sub-links');
-        if (menu.length) {
-            // מניעת כפילות: הסרת הכפתור אם הוא כבר קיים (מעודכן לזהות את הקישור החדש)
-            menu.find(`a[href*="/user/${userSlug}/chats"]`).parent().remove();
-            
-            menu.prepend(btnHtml);
-        }
-    });
-});
-/*
-$(document).ready(function() {
+    // מאזין לכל טעינת דף (ניווט)
     $(window).on('action:ajaxify.end', function(ev, data) {
         
-        // בדיקה שאנחנו בפרופיל ובדיקה שאנחנו אדמין
-        if ((data.tpl_url !== 'account/profile' && ajaxify.data.template.name !== 'account/profile') || !app.user.isAdmin) {
-            return;
+        // 1. הוספת כפתור "צפה בצ'אטים" לפרופיל (מהשלב הקודם)
+        if (app.user.isAdmin && (data.tpl_url === 'account/profile' || ajaxify.data.template.name === 'account/profile')) {
+            const userSlug = ajaxify.data.userslug || (ajaxify.data.user && ajaxify.data.user.userslug);
+            if (userSlug) {
+                const btnHtml = `
+                    <li role="presentation">
+                        <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="/user/${userSlug}/chats" role="menuitem">
+                            <i class="fa fa-fw fa-comments text-danger"></i> <span>צפה בצ'אטים</span>
+                        </a>
+                    </li>
+                    <li role="presentation" class="dropdown-divider"></li>
+                `;
+                const menu = $('.account-sub-links');
+                if (menu.length) {
+                    menu.find(`a[href*="/user/${userSlug}/chats"]`).parent().remove();
+                    menu.prepend(btnHtml);
+                }
+            }
         }
 
-        const targetUid = ajaxify.data.uid || ajaxify.data.user.uid;
-        console.log('[Admin Chats Plugin] Injecting button for UID:', targetUid);
-
-        // שינוי הקישור לנתיב החדש: /user-chats-viewer/
-        // הוספנו target="_blank" כדי שייפתח בטאב חדש נקי
-        const btnHtml = `
-            <li role="presentation">
-                <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="/user/${targetUid}/chats" role="menuitem">
-                    <i class="fa fa-fw fa-eye text-danger"></i> <span>צפה בצ'אטים)</span>
-                </a>
-            </li>
-            <li role="presentation" class="dropdown-divider"></li>
-        `;
-
-        const menu = $('.account-sub-links');
-        if (menu.length) {
-            // מונע כפילות כפתורים אם עוברים מהר בין דפים
-            menu.find('a[href*="/user-chats-viewer/"]').parent().remove();
-            menu.prepend(btnHtml);
+        // 2. הפעלת החלפת הטקסט (אם אנחנו בעמוד צ'אטים)
+        if (data.url.match(/^user\/.+\/chats/) || data.url === 'chats') {
+            replaceAdminEmptyStateText();
+            // לפעמים הטקסט נטען בדיליי, נבדוק שוב אחרי חצי שניה
+            setTimeout(replaceAdminEmptyStateText, 500);
         }
     });
+
+    // מאזין לשינויים בצ'אט (למשל כשעוברים בין חדרים או סוגרים חדר)
+    $(window).on('action:chat.loaded', replaceAdminEmptyStateText);
+    $(window).on('action:chat.closed', function() {
+        setTimeout(replaceAdminEmptyStateText, 200);
+    });
 });
-*/
