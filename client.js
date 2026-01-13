@@ -13,8 +13,8 @@ $(document).ready(function() {
         // הוספנו target="_blank" כדי שייפתח בטאב חדש נקי
         const btnHtml = `
             <li role="presentation">
-                <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="/user-chats-viewer/${targetUid}" target="_blank" role="menuitem">
-                    <i class="fa fa-fw fa-eye text-danger"></i> <span>צפה בצ'אטים (מנהל)</span>
+                <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="/user/${targetUid}/chats" role="menuitem">
+                    <i class="fa fa-fw fa-eye text-danger"></i> <span>צפה בצ'אטים)</span>
                 </a>
             </li>
             <li role="presentation" class="dropdown-divider"></li>
