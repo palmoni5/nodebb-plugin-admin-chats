@@ -1,5 +1,5 @@
 {
-  "name": "nodebb-plugin-super-admin-chats",
+  "name": "nodebb-plugin-admin-chats",
   "version": "1.0.0",
   "description": "A plugin that allows the administrator to view and manage user chats.",
   "main": "library.js",
