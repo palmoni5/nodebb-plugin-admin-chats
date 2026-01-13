@@ -1,5 +1,38 @@
 $(document).ready(function() {
     $(window).on('action:ajaxify.end', function(ev, data) {
+       
+        // בדיקה שאנחנו בפרופיל ובדיקה שאנחנו אדמין
+        if ((data.tpl_url !== 'account/profile' && ajaxify.data.template.name !== 'account/profile') || !app.user.isAdmin) {
+            return;
+        }
+
+        // שינוי: שליפת ה-userslug (השם המופיע בכתובת ה-URL) במקום ה-uid
+        const userSlug = ajaxify.data.userslug || (ajaxify.data.user && ajaxify.data.user.userslug);
+        
+        console.log('[Admin Chats Plugin] Injecting button for User Slug:', userSlug);
+
+        // שינוי הקישור: שימוש ב-userSlug במקום targetUid
+        const btnHtml = `
+            <li role="presentation">
+                <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="/user/${userSlug}/chats" role="menuitem">
+                    <i class="fa fa-fw fa-eye text-danger"></i> <span>צפה בצ'אטים</span>
+                </a>
+            </li>
+            <li role="presentation" class="dropdown-divider"></li>
+        `;
+
+        const menu = $('.account-sub-links');
+        if (menu.length) {
+            // מניעת כפילות: הסרת הכפתור אם הוא כבר קיים (מעודכן לזהות את הקישור החדש)
+            menu.find(`a[href*="/user/${userSlug}/chats"]`).parent().remove();
+            
+            menu.prepend(btnHtml);
+        }
+    });
+});
+/*
+$(document).ready(function() {
+    $(window).on('action:ajaxify.end', function(ev, data) {
         
         // בדיקה שאנחנו בפרופיל ובדיקה שאנחנו אדמין
         if ((data.tpl_url !== 'account/profile' && ajaxify.data.template.name !== 'account/profile') || !app.user.isAdmin) {
@@ -28,3 +61,4 @@ $(document).ready(function() {
         }
     });
 });
+*/
