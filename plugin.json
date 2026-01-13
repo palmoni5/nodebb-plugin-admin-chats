@@ -1,7 +1,7 @@
 {
-    "id": "nodebb-plugin-super-admin-chats",
+    "id": "nodebb-plugin-admin-chats",
     "name": "Super Admin Chat Control",
-    "description": "Full admin control over chats + Profile Links",
+    "description": "A plugin that allows the administrator to view and manage user chats",
     "url": "https://github.com/yourname/nodebb-plugin-super-admin-chats",
     "library": "./library.js",
     "scripts": [ "client.js" ],
