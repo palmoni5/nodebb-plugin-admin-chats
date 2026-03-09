@@ -4,5 +4,6 @@
   "menu.release": "Release Lock",
   "errors.update": "Unable to update room lock.",
   "profile.viewChats": "View Chats",
-  "empty.selectChat": "Please select a chat from the sidebar."
+  "empty.selectChat": "Please select a chat from the sidebar.",
+  "errors.lockedAction": "This action cannot be performed in a locked room."
 }

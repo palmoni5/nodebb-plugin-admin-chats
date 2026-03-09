@@ -4,5 +4,6 @@
   "menu.release": "שיחרור נעילה",
   "errors.update": "לא ניתן לעדכן את נעילת החדר.",
   "profile.viewChats": "צפיה בצ'אטים",
-  "empty.selectChat": "אנא בחר צ'אט מסרגל הצד."
+  "empty.selectChat": "אנא בחר צ'אט מסרגל הצד.",
+  "errors.lockedAction": "לא ניתן לבצע פעולה זו בחדר נעול"
 }

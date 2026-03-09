@@ -86,28 +86,28 @@ plugin.filterMessagingSend = async function (payload) {
     }
 
     if (await isRoomLocked(roomId)) {
-        throw new Error('[[error:not-allowed]]');
+        throw new Error('[[admin-chats:errors.lockedAction]]');
     }
 
     return payload;
 };
 plugin.filterAddUsersToRoom = async function (payload) {
     if (await canNonAdminModifyLockedRoom(payload.uid, payload.roomId)) {
-        payload.inRoom = false;
+        throw new Error('[[admin-chats:errors.lockedAction]]');
     }
     return payload;
 };
 
 plugin.filterRemoveUsersFromRoom = async function (payload) {
     if (await canNonAdminModifyLockedRoom(payload.uid, payload.roomId)) {
-        payload.isOwner = false;
+        throw new Error('[[admin-chats:errors.lockedAction]]');
     }
     return payload;
 };
 
 plugin.filterRenameRoom = async function (payload) {
     if (await canNonAdminModifyLockedRoom(payload.uid, payload.roomId)) {
-        throw new Error('[[error:no-privileges]]');
+        throw new Error('[[admin-chats:errors.lockedAction]]');
     }
     return payload;
 };
@@ -207,7 +207,7 @@ function overrideChatsApi() {
     const originalKick = ChatsAPI.kick;
     const wrappedKick = async function (caller, data) {
         if (caller && !await User.isAdministrator(caller.uid) && data && data.roomId && Array.isArray(data.uids) && data.uids.length === 1 && parseInt(data.uids[0], 10) === parseInt(caller.uid, 10) && await isRoomLocked(data.roomId)) {
-            throw new Error('[[error:not-allowed]]');
+            throw new Error('[[admin-chats:errors.lockedAction]]');
         }
 
         return await originalKick.call(this, caller, data);
@@ -229,7 +229,7 @@ function overrideMessagingFunctions() {
 
         const roomId = await getMessageRoomId(messageId);
         if (roomId && await isRoomLocked(roomId)) {
-            throw new Error('[[error:cant-edit-chat-message]]');
+            throw new Error('[[admin-chats:errors.lockedAction]]');
         }
 
         return await originalCanEdit(messageId, uid);
@@ -242,7 +242,7 @@ function overrideMessagingFunctions() {
 
         const roomId = await getMessageRoomId(messageId);
         if (roomId && await isRoomLocked(roomId)) {
-            throw new Error('[[error:cant-delete-chat-message]]');
+            throw new Error('[[admin-chats:errors.lockedAction]]');
         }
 
         return await originalCanDelete(messageId, uid);
