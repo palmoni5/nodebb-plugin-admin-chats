@@ -63,6 +63,17 @@
     {
       "hook": "filter:scripts.get",
       "method": "addScripts"
+    },
+    {
+      "hook": "filter:notifications.create",
+      "method": "filterNotificationCreate"
+    },
+    {
+      "hook": "filter:user.notifications.getNotifications",
+      "method": "filterUserNotificationsGetNotifications"
     }
   ]
 }
+
+
+

@@ -18,6 +18,10 @@ A professional administration plugin for NodeBB that allows administrators to mo
 * **ID**: `nodebb-plugin-admin-chats`
 * **Compatibility**: NodeBB versions `^3.0.0` or `^4.0.0`
 
+### Chat Route Behavior (`/chats`)
+NodeBB exposes a core route at `/chats` (and `/chats/:roomId/:index?`) that redirects logged-in users to their personal chat page under `/user/:userslug/chats/...`.
+This plugin also rewrites chat notification links to use `/user/:userslug/chats/...`, ensuring admins land on the correct user-scoped chat view when opening notifications.
+
 ### Implemented Hooks
 The plugin utilizes several filters to elevate administrator permissions:
 
@@ -54,3 +58,4 @@ The plugin includes a `client.js` script that:
 
 ---
 *Developed by [palmoni5](https://github.com/palmoni5/nodebb-plugin-admin-chats).*
+

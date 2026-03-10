@@ -43,6 +43,63 @@ plugin.init = async function (params) {
     overrideCoreChatRedirect(params.controllers);
 };
 
+plugin.filterNotificationCreate = async function (data) {
+    if (!data || !data.data) {
+        return data;
+    }
+
+    const notification = data.data;
+    
+    // Check if this is a chat notification with path like /chats/123
+    if (notification.path && notification.path.match(/^\/chats\/\d+/)) {
+        const chatMatch = notification.path.match(/^\/chats\/(\d+)(?:\/(\d+))?$/);
+        if (chatMatch && notification && notification.uid) {
+            const roomId = chatMatch[1];
+            const index = chatMatch[2];
+            
+            // Get the user's slug to redirect to their personal chat page
+            const userSlug = await User.getUserField(notification.uid, 'userslug');
+            if (userSlug) {
+                notification.path = `/user/${userSlug}/chats/${roomId}${index ? `/${index}` : ''}`;
+            }
+        }
+    }
+
+    return data;
+};
+
+plugin.filterUserNotificationsGetNotifications = async function (data) {
+    if (!data || !data.uid || !Array.isArray(data.notifications) || !data.notifications.length) {
+        return data;
+    }
+
+    const userSlug = await User.getUserField(data.uid, 'userslug');
+    if (!userSlug) {
+        return data;
+    }
+
+    const userPathRegex = /\/user\/[^/]+\/chats\//;
+    const chatPathRegex = /\/chats\/(\d+)(?:\/(\d+))?(?=$|[/?#])/;
+
+    data.notifications.forEach((notification) => {
+        if (!notification || !notification.path) {
+            return;
+        }
+        if (userPathRegex.test(notification.path)) {
+            return;
+        }
+        const match = notification.path.match(chatPathRegex);
+        if (!match) {
+            return;
+        }
+        const roomId = match[1];
+        const index = match[2];
+        const replacement = `/user/${userSlug}/chats/${roomId}${index ? `/${index}` : ''}`;
+        notification.path = notification.path.replace(chatPathRegex, replacement);
+    });
+
+    return data;
+};
 plugin.addScripts = async function (data) {
     let isHebrew = false;
     
@@ -393,6 +450,15 @@ function registerRoutes(app, router, middleware) {
 
     const pageController = async (req, res, next) => {
         try {
+            // If user is not admin, redirect to user-specific chat URL
+            if (req.uid && !await User.isAdministrator(req.uid)) {
+                const userSlug = await User.getUserField(req.uid, 'userslug');
+                if (userSlug && req.params.roomId) {
+                    const redirectUrl = `${req.baseUrl || ''}/user/${userSlug}/chats/${req.params.roomId}${req.params.index ? `/${req.params.index}` : ''}`;
+                    return res.redirect(redirectUrl);
+                }
+            }
+            
             await renderAdminChatsPage(req, res, next);
         } catch (err) {
             next(err);
@@ -833,4 +899,6 @@ function getRoomId(payload) {
 }
 
 module.exports = plugin;
+
+
 

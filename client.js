@@ -160,6 +160,14 @@ $(document).ready(function() {
                 Chats._adminAllChatsPatched = true;
             }
 
+            // Auto-open chat if roomId is specified in URL
+            const currentRoomId = ajaxify && ajaxify.data && ajaxify.data.roomId;
+            if (currentRoomId && !$('body').hasClass('chat-loaded')) {
+                setTimeout(function() {
+                    Chats.switchChat(currentRoomId);
+                }, 100);
+            }
+
             bindAdminRecentChatsInfiniteScroll();
         });
     }
@@ -471,6 +479,18 @@ $(document).ready(function() {
         if (isAdminAllChatsPage()) {
             patchForumChatsForAdminAll();
             bindAdminRecentChatsInfiniteScroll();
+            
+            // Auto-open chat if roomId is specified in URL and chat is not already loaded
+            const currentRoomId = ajaxify && ajaxify.data && ajaxify.data.roomId;
+            if (currentRoomId && !$('body').hasClass('chat-loaded')) {
+                setTimeout(function() {
+                    require(['forum/chats'], function(Chats) {
+                        if (Chats && Chats.switchChat) {
+                            Chats.switchChat(currentRoomId);
+                        }
+                    });
+                }, 200);
+            }
         }
 
         const url = data && data.url ? data.url : '';
@@ -478,6 +498,11 @@ $(document).ready(function() {
             refreshChatUi();
             setTimeout(refreshChatUi, 500);
             setTimeout(refreshChatUi, 1200);
+            
+            // Handle chat navigation for internal URL changes
+            if (url.match(/^chats\/\d+/)) {
+                setTimeout(handleChatNavigation, 300);
+            }
         }
     });
 
@@ -485,6 +510,20 @@ $(document).ready(function() {
         if (isAdminAllChatsPage()) {
             patchForumChatsForAdminAll();
             bindAdminRecentChatsInfiniteScroll();
+            
+            // Auto-open chat if roomId is specified in URL and no chat is currently active
+            const currentRoomId = ajaxify && ajaxify.data && ajaxify.data.roomId;
+            const activeChatId = $('[component="chat/main-wrapper"]').attr('data-roomid');
+            
+            if (currentRoomId && (!activeChatId || activeChatId !== String(currentRoomId))) {
+                setTimeout(function() {
+                    require(['forum/chats'], function(Chats) {
+                        if (Chats && Chats.switchChat) {
+                            Chats.switchChat(currentRoomId);
+                        }
+                    });
+                }, 100);
+            }
         }
         refreshChatUi();
         setTimeout(refreshChatUi, 200);
@@ -498,6 +537,41 @@ $(document).ready(function() {
     $(window).on('action:chat.onMessagesAddedToDom action:chat.edited action:chat.renamed', function() {
         setTimeout(refreshChatUi, 0);
     });
+
+    // Handle browser back/forward navigation
+    $(window).on('popstate', function() {
+        if (isAdminAllChatsPage()) {
+            setTimeout(handleChatNavigation, 100);
+        }
+    });
+
+    // Handle URL changes for internal navigation
+    function handleChatNavigation() {
+        if (!isAdminAllChatsPage()) {
+            return;
+        }
+        
+        // Try to get roomId from multiple sources
+        let currentRoomId = ajaxify && ajaxify.data && ajaxify.data.roomId;
+        
+        // If not found in ajaxify.data, try to extract from URL
+        if (!currentRoomId) {
+            const urlMatch = window.location.pathname.match(/\/chats\/(\d+)/);
+            if (urlMatch) {
+                currentRoomId = parseInt(urlMatch[1], 10);
+            }
+        }
+        
+        const activeChatId = $('[component="chat/main-wrapper"]').attr('data-roomid');
+        
+        if (currentRoomId && (!activeChatId || activeChatId !== String(currentRoomId))) {
+            require(['forum/chats'], function(Chats) {
+                if (Chats && Chats.switchChat) {
+                    Chats.switchChat(currentRoomId);
+                }
+            });
+        }
+    }
 
     $(document).on('click', '.admin-chat-lock-toggle-item', async function(ev) {
         ev.preventDefault();
