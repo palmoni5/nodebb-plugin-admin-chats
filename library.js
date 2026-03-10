@@ -4,15 +4,21 @@ const User = require.main.require('./src/user');
 const Messaging = require.main.require('./src/messaging');
 const ChatsAPI = require.main.require('./src/api/chats');
 const db = require.main.require('./src/database');
+const meta = require.main.require('./src/meta');
+const privileges = require.main.require('./src/privileges');
+const helpers = require.main.require('./src/controllers/helpers');
 
 const plugin = {};
 const LOCK_PREFIX = '[admin-chat-lock]';
 const LOCKED_MESSAGE_TEXT = '🔒 חדר זה ננעל ע"י המנהלים.';
+const ADMIN_CHAT_PAGE_SIZE = 30;
+const ADMIN_CHAT_SCAN_SIZE = 100;
 
 plugin.init = async function (params) {
-    registerRoutes(params.router, params.middleware);
+    registerRoutes(params.app, params.router, params.middleware);
     overrideMessagingFunctions();
     overrideChatsApi();
+    overrideCoreChatRedirect(params.controllers);
 };
 
 plugin.addProfileLink = async function (data) {
@@ -147,7 +153,7 @@ plugin.onLoadRoom = async function (payload) {
     const isLockedForUser = lockData.isLocked && !isAdmin;
 
     room.adminChatLock = lockData;
-    room.messages = buildRoomMessagesWithLockNotice(room.messages, lockData);
+    room.messages = ensureFirstVisibleMessageHeader(buildRoomMessagesWithLockNotice(room.messages, lockData));
     room.canReply = room.canReply && !isLockedForUser;
     room.showUserInput = room.showUserInput && !isLockedForUser;
 
@@ -179,16 +185,26 @@ plugin.onLoadRoom = async function (payload) {
                 msg.index = count - index - 1;
             });
 
-            room.messages = buildRoomMessagesWithLockNotice(messages.reverse(), lockData);
+            room.messages = ensureFirstVisibleMessageHeader(buildRoomMessagesWithLockNotice(messages.reverse(), lockData));
 
             room.messages.forEach((msg, index) => {
                 if (index === 0) {
                     msg.newSet = true;
                 } else {
                     const prevMsg = room.messages[index - 1];
-                    msg.newSet = parseInt(msg.fromuid, 10) !== parseInt(prevMsg.fromuid, 10);
+                    const prevTime = parseInt(prevMsg && prevMsg.timestamp, 10) || 0;
+                    const currentTime = parseInt(msg && msg.timestamp, 10) || 0;
+
+                    msg.newSet = !!(
+                        currentTime > prevTime + Messaging.newMessageCutoff ||
+                        parseInt(msg.fromuid, 10) !== parseInt(prevMsg.fromuid, 10) ||
+                        prevMsg.system ||
+                        msg.toMid
+                    );
                 }
             });
+
+            room.messages = ensureFirstVisibleMessageHeader(room.messages);
         }
 
         room.isAdmin = true;
@@ -198,6 +214,25 @@ plugin.onLoadRoom = async function (payload) {
     }
     return payload;
 };
+
+function overrideCoreChatRedirect(controllers) {
+    const chatsController = controllers && controllers.accounts && controllers.accounts.chats;
+    if (!chatsController || typeof chatsController.redirectToChat !== 'function' || chatsController.redirectToChat._adminChatsWrapped) {
+        return;
+    }
+
+    const originalRedirectToChat = chatsController.redirectToChat;
+    const wrappedRedirectToChat = async function (req, res, next) {
+        if (req && req.uid && await User.isAdministrator(req.uid)) {
+            return await renderAdminChatsPage(req, res, next);
+        }
+
+        return await originalRedirectToChat.call(this, req, res, next);
+    };
+
+    wrappedRedirectToChat._adminChatsWrapped = true;
+    chatsController.redirectToChat = wrappedRedirectToChat;
+}
 
 function overrideChatsApi() {
     if (!ChatsAPI || typeof ChatsAPI.kick !== 'function' || ChatsAPI.kick._adminChatLockWrapped) {
@@ -269,7 +304,7 @@ function overrideMessagingFunctions() {
     }
 }
 
-function registerRoutes(router, middleware) {
+function registerRoutes(app, router, middleware) {
     if (!router) {
         return;
     }
@@ -278,6 +313,58 @@ function registerRoutes(router, middleware) {
     if (middleware && typeof middleware.ensureLoggedIn === 'function') {
         routeMiddleware.push(middleware.ensureLoggedIn);
     }
+
+    const pageMiddlewares = [
+        middleware.autoLocale,
+        middleware.applyBlacklist,
+        middleware.authenticateRequest,
+        middleware.redirectToHomeIfBanned,
+        middleware.maintenanceMode,
+        middleware.registrationComplete,
+        middleware.pluginHooks,
+        ...routeMiddleware,
+        middleware.pageView,
+    ].filter(Boolean);
+
+    const pageController = async (req, res, next) => {
+        try {
+            await renderAdminChatsPage(req, res, next);
+        } catch (err) {
+            next(err);
+        }
+    };
+
+    const pageRouter = app || router;
+    pageRouter.get('/chats/:roomId?/:index?', middleware.busyCheck, pageMiddlewares, middleware.buildHeader, pageController);
+
+    router.get('/api/admin-chats', ...routeMiddleware, async (req, res) => {
+        try {
+            if (!await assertAdminChatsAccess(req, res)) {
+                return;
+            }
+
+            const start = Math.max(0, parseInt(req.query.start, 10) || 0);
+            const data = await getAdminRecentChats(req.uid, start, ADMIN_CHAT_PAGE_SIZE);
+            res.json(data);
+        } catch (err) {
+            console.error('[Super Admin Chats] Error loading admin chat list:', err);
+            res.status(500).json({ status: { code: 'error', message: err.message } });
+        }
+    });
+
+    router.get('/api/admin-chats/page/:roomId?/:index?', ...routeMiddleware, async (req, res) => {
+        try {
+            if (!await assertAdminChatsAccess(req, res)) {
+                return;
+            }
+
+            const payload = await buildAdminChatsPayload(req);
+            res.json(payload);
+        } catch (err) {
+            console.error('[Super Admin Chats] Error loading admin chat page data:', err);
+            res.status(500).json({ status: { code: 'error', message: err.message } });
+        }
+    });
 
     router.post('/api/admin-chats/:roomId/lock', ...routeMiddleware, async (req, res) => {
         try {
@@ -311,6 +398,217 @@ function registerRoutes(router, middleware) {
             return res.status(500).json({ status: { code: 'error', message: err.message } });
         }
     });
+}
+
+async function renderAdminChatsPage(req, res, next) {
+    if (meta.config.disableChat) {
+        return next();
+    }
+
+    if (!await assertAdminChatsAccess(req, res)) {
+        return;
+    }
+
+    const payload = await buildAdminChatsPayload(req);
+    if (req.params.roomId && !payload.roomId) {
+        return next();
+    }
+
+    res.render('chats', payload);
+}
+
+async function assertAdminChatsAccess(req, res) {
+    if (!req.uid || !await User.isAdministrator(req.uid)) {
+        helpers.notAllowed(req, res);
+        return false;
+    }
+
+    return true;
+}
+
+async function buildAdminChatsPayload(req) {
+    const userslug = await User.getUserField(req.uid, 'userslug');
+    const [recentChats, publicRooms, privateRoomCount] = await Promise.all([
+        getAdminRecentChats(req.uid, 0, ADMIN_CHAT_PAGE_SIZE),
+        Messaging.getPublicRooms(req.uid, req.uid),
+        getPrivateRoomCount(),
+    ]);
+
+    const payload = {
+        title: '[[pages:chats]]',
+        uid: req.uid,
+        userslug,
+        adminAllChats: true,
+        rooms: recentChats.rooms,
+        nextStart: recentChats.nextStart,
+        publicRooms: publicRooms || [],
+        privateRoomCount,
+        bodyClasses: ['page-user-chats'],
+    };
+
+    const roomId = parseInt(req.params.roomId, 10) || 0;
+    if (!roomId) {
+        return payload;
+    }
+
+    const roomPayload = await buildAdminChatRoomPayload(req.uid, roomId, req.params.index);
+    if (!roomPayload) {
+        return payload;
+    }
+
+    return {
+        ...payload,
+        ...roomPayload,
+    };
+}
+
+async function buildAdminChatRoomPayload(uid, roomId, indexParam) {
+    let start = 0;
+    let scrollToIndex = null;
+
+    if (indexParam) {
+        const msgCount = await db.getObjectField(`chat:room:${roomId}`, 'messageCount');
+        start = Math.max(0, parseInt(msgCount, 10) - parseInt(indexParam, 10) - 49);
+        scrollToIndex = Math.min(msgCount, Math.max(0, parseInt(indexParam, 10) || 1));
+    }
+
+    const room = await Messaging.loadRoom(uid, {
+        uid,
+        roomId,
+        start,
+    });
+
+    if (!room) {
+        return null;
+    }
+
+    const [canViewInfo, canUploadImage, canUploadFile] = await privileges.global.can([
+        'view:users:info', 'upload:post:image', 'upload:post:file',
+    ], uid);
+
+    room.title = room.roomName || room.usernames || '[[pages:chats]]';
+    room.bodyClasses = ['page-user-chats', 'chat-loaded'];
+    room.canViewInfo = canViewInfo;
+    room.canUpload = (canUploadImage || canUploadFile) && (meta.config.maximumFileSize > 0 || room.isAdmin);
+    room.scrollToIndex = scrollToIndex;
+
+    return room;
+}
+
+async function getPrivateRoomCount() {
+    const [totalCount, publicCount] = await Promise.all([
+        db.sortedSetCard('chat:rooms'),
+        db.sortedSetCard('chat:rooms:public'),
+    ]);
+
+    return Math.max(0, (parseInt(totalCount, 10) || 0) - (parseInt(publicCount, 10) || 0));
+}
+
+async function getAdminRecentChats(uid, start, limit) {
+    let cursor = Math.max(0, parseInt(start, 10) || 0);
+    const roomPairs = [];
+
+    while (roomPairs.length < limit) {
+        const roomIds = await db.getSortedSetRevRange('chat:rooms', cursor, cursor + ADMIN_CHAT_SCAN_SIZE - 1);
+        if (!roomIds.length) {
+            break;
+        }
+
+        const rooms = await Messaging.getRoomsData(roomIds);
+        rooms.forEach((room, index) => {
+            if (room && !room.public && roomPairs.length < limit) {
+                roomPairs.push({
+                    roomId: roomIds[index],
+                    room,
+                });
+            }
+        });
+
+        cursor += roomIds.length;
+        if (roomIds.length < ADMIN_CHAT_SCAN_SIZE) {
+            break;
+        }
+    }
+
+    const rooms = roomPairs.map(item => item.room);
+    const roomIds = roomPairs.map(item => item.roomId);
+
+    await enrichAdminRecentRooms(uid, roomIds, rooms);
+
+    return {
+        rooms,
+        nextStart: cursor,
+    };
+}
+
+async function enrichAdminRecentRooms(uid, roomIds, rooms) {
+    if (!roomIds.length) {
+        return;
+    }
+
+    const roomUsers = await Promise.all(roomIds.map(roomId => Messaging.getUidsInRoom(roomId, 0, 9)));
+    const uniqueUids = [...new Set(roomUsers.flat().filter(Boolean))];
+    const userMap = new Map();
+
+    if (uniqueUids.length) {
+        const users = await User.getUsersFields(uniqueUids, [
+            'uid', 'username', 'userslug', 'displayname', 'picture', 'status', 'lastonline',
+        ]);
+        uniqueUids.forEach((memberUid, index) => {
+            const userData = users[index];
+            if (userData) {
+                userData.status = User.getStatus(userData);
+                userMap.set(String(memberUid), userData);
+            }
+        });
+    }
+
+    const teasers = await Promise.all(roomIds.map(roomId => getAdminRoomTeaser(roomId)));
+
+    rooms.forEach((room, index) => {
+        if (!room) {
+            return;
+        }
+
+        room.users = (roomUsers[index] || [])
+            .map(memberUid => userMap.get(String(memberUid)))
+            .filter(Boolean);
+        room.groupChat = room.userCount > 2;
+        room.unread = false;
+        room.teaser = teasers[index];
+        room.lastUser = room.users[0];
+        room.usernames = Messaging.generateUsernames(room, uid);
+        room.icon = Messaging.getRoomIcon(room);
+    });
+}
+
+async function getAdminRoomTeaser(roomId) {
+    const mids = await db.getSortedSetRevRange(`chat:room:${roomId}:mids`, 0, 19);
+    if (!mids.length) {
+        return null;
+    }
+
+    const teaser = (await Messaging.getMessagesFields(mids, ['fromuid', 'content', 'timestamp', 'deleted', 'system']))
+        .find(message => message && !message.deleted && !message.system && message.fromuid);
+
+    if (!teaser) {
+        return null;
+    }
+
+    const teaserUser = await User.getUserFields(teaser.fromuid, [
+        'uid', 'username', 'userslug', 'displayname', 'picture', 'status', 'lastonline',
+    ]);
+
+    if (teaserUser) {
+        teaser.user = teaserUser;
+    }
+
+    teaser.content = String(teaser.content || '')
+        .replace(/<[^>]*>/g, '')
+        .trim();
+    teaser.roomId = roomId;
+
+    return teaser;
 }
 
 async function canNonAdminModifyLockedRoom(uid, roomId) {
@@ -371,6 +669,17 @@ async function getRoomLockData(roomId) {
         lockedBy,
         lockedAt,
     };
+}
+
+function ensureFirstVisibleMessageHeader(messages) {
+    const list = Array.isArray(messages) ? messages.slice() : [];
+    const firstUserMessageIndex = list.findIndex(msg => msg && !msg.system);
+
+    if (firstUserMessageIndex !== -1) {
+        list[firstUserMessageIndex].newSet = true;
+    }
+
+    return list;
 }
 
 function buildRoomMessagesWithLockNotice(messages, lockData) {

@@ -31,6 +31,133 @@ $(document).ready(function() {
         return dict[key];
     }
 
+    function isAdminAllChatsPage() {
+        return !!(ajaxify && ajaxify.data && ajaxify.data.adminAllChats);
+    }
+
+    function getAdminChatsPageUrl(roomId) {
+        return roomId ? `chats/${roomId}` : 'chats';
+    }
+
+    function getAdminChatsDataUrl(roomId) {
+        const params = new URL(document.location).searchParams;
+        params.set('switch', 1);
+        const query = params.toString();
+        return `${config.relative_path || ''}/api/admin-chats/page${roomId ? `/${roomId}` : ''}${query ? `?${query}` : ''}`;
+    }
+
+    async function loadMoreAdminChats() {
+        const recentChats = $('[component="chat/recent"]');
+        if (!isAdminAllChatsPage() || !recentChats.length || recentChats.attr('loading')) {
+            return;
+        }
+
+        recentChats.attr('loading', 1);
+
+        try {
+            const start = parseInt(recentChats.attr('data-nextstart'), 10) || 0;
+            const response = await fetch(`${config.relative_path || ''}/api/admin-chats?start=${start}`, {
+                headers: {
+                    'x-csrf-token': config.csrf_token,
+                },
+                credentials: 'same-origin',
+            });
+
+            if (!response.ok) {
+                throw new Error('Unable to load chats');
+            }
+
+            const payload = await response.json();
+            if (payload.rooms && payload.rooms.length) {
+                payload.loadingMore = true;
+                const html = await app.parseAndTranslate('chats', 'rooms', payload);
+                recentChats.append(html);
+                html.find('.timeago').timeago();
+                recentChats.attr('data-nextstart', payload.nextStart);
+            }
+        } catch (err) {
+            app.alertError(err);
+        } finally {
+            recentChats.removeAttr('loading');
+        }
+    }
+
+    function bindAdminRecentChatsInfiniteScroll() {
+        if (!isAdminAllChatsPage()) {
+            return;
+        }
+
+        $('[component="chat/recent"]').off('scroll').on('scroll', utils.debounce(function() {
+            const $this = $(this);
+            const bottom = ($this[0].scrollHeight - $this.height()) * 0.9;
+            if ($this.scrollTop() > bottom) {
+                loadMoreAdminChats();
+            }
+        }, 100));
+    }
+
+    function patchForumChatsForAdminAll() {
+        if (!isAdminAllChatsPage()) {
+            return;
+        }
+
+        require(['forum/chats', 'forum/chats/messages'], function(Chats, ChatsMessages) {
+            if (!Chats) {
+                return;
+            }
+
+            if (!Chats._adminAllChatsPatched) {
+                const originalSwitchChat = Chats.switchChat;
+
+                Chats.switchChat = function(roomId) {
+                    if (!isAdminAllChatsPage()) {
+                        return originalSwitchChat.call(this, roomId);
+                    }
+
+                    roomId = roomId || '';
+                    Chats.destroyAutoComplete(ajaxify.data.roomId);
+                    socket.emit('modules.chats.leave', ajaxify.data.roomId);
+
+                    const url = getAdminChatsPageUrl(roomId);
+                    fetch(getAdminChatsDataUrl(roomId), { credentials: 'include' })
+                        .then(async function(response) {
+                            if (!response.ok) {
+                                throw new Error(`Received ${response.status}`);
+                            }
+
+                            const payload = await response.json();
+                            const html = await app.parseAndTranslate('partials/chats/message-window', payload);
+                            const mainWrapper = $('[component="chat/main-wrapper"]');
+                            mainWrapper.html(html);
+                            mainWrapper.attr('data-roomid', roomId);
+                            html.find('.timeago').timeago();
+                            ajaxify.data = { ...ajaxify.data, ...payload, roomId: roomId };
+                            ajaxify.updateTitle(ajaxify.data.title);
+                            $('body').toggleClass('chat-loaded', !!roomId);
+                            mainWrapper.find('[data-bs-toggle="tooltip"]').tooltip({ trigger: 'hover', container: '#content' });
+                            Chats.setActive(roomId);
+                            Chats.addEventListeners();
+                            $(window).trigger('action:chat.loaded');
+                            if (roomId) {
+                                ChatsMessages.scrollToBottomAfterImageLoad(mainWrapper.find('[component="chat/message/content"]'));
+                            }
+                            if (history.pushState) {
+                                history.pushState({ url: url }, null, `${window.location.protocol}//${window.location.host}${config.relative_path || ''}/${url}`);
+                            }
+                            bindAdminRecentChatsInfiniteScroll();
+                        })
+                        .catch(function(error) {
+                            console.warn('[admin-chats] ' + error.message);
+                        });
+                };
+
+                Chats._adminAllChatsPatched = true;
+            }
+
+            bindAdminRecentChatsInfiniteScroll();
+        });
+    }
+
     function replaceAdminEmptyStateText() {
         if (!app.user.isAdmin) {
             return;
@@ -96,7 +223,10 @@ $(document).ready(function() {
             return cached;
         }
 
-        const response = await fetch(`${config.relative_path || ''}/api/chats/${roomId}`, {
+        const endpoint = isAdminAllChatsPage() ?
+            `${config.relative_path || ''}/api/admin-chats/page/${roomId}` :
+            `${config.relative_path || ''}/api/chats/${roomId}`;
+        const response = await fetch(endpoint, {
             headers: {
                 'x-csrf-token': config.csrf_token,
             },
@@ -243,8 +373,18 @@ $(document).ready(function() {
         normalizeLockMessages($window);
     }
 
+
+    function applyAdminAllPageTweaks() {
+        if (!isAdminAllChatsPage()) {
+            return;
+        }
+
+        $('[component="chat/recent"] .mark-read').addClass('hidden');
+        $('[data-action="leave"]').closest('li').addClass('hidden');
+    }
     async function refreshChatUi() {
         replaceAdminEmptyStateText();
+        applyAdminAllPageTweaks();
         const windows = getChatWindows();
         await Promise.all(windows.map(function() {
             return applyUiToWindow($(this));
@@ -294,8 +434,13 @@ $(document).ready(function() {
             }
         }
 
+        if (isAdminAllChatsPage()) {
+            patchForumChatsForAdminAll();
+            bindAdminRecentChatsInfiniteScroll();
+        }
+
         const url = data && data.url ? data.url : '';
-        if (url.match(/^user\/.+\/chats/) || url === 'chats') {
+        if (url.match(/^user\/.+\/chats/) || url.match(/^chats(\/|$)/)) {
             refreshChatUi();
             setTimeout(refreshChatUi, 500);
             setTimeout(refreshChatUi, 1200);
@@ -303,6 +448,10 @@ $(document).ready(function() {
     });
 
     $(window).on('action:chat.loaded', function() {
+        if (isAdminAllChatsPage()) {
+            patchForumChatsForAdminAll();
+            bindAdminRecentChatsInfiniteScroll();
+        }
         refreshChatUi();
         setTimeout(refreshChatUi, 200);
         setTimeout(refreshChatUi, 1000);
@@ -355,7 +504,6 @@ $(document).ready(function() {
         }
     });
 
-    // Intercept error alerts to translate locked action errors
     if (app && app.alertError) {
         const originalAlertError = app.alertError;
         app.alertError = function(error) {
@@ -370,12 +518,10 @@ $(document).ready(function() {
         };
     }
 
-    // Intercept and translate error messages from API
     if (app.alertError && !app.alertError._adminChatsWrapped) {
         const originalAlertError = app.alertError;
         app.alertError = function(message) {
             if (typeof message === 'string') {
-                // Check if message contains translation key
                 if (message.includes('[[admin-chats:errors.lockedAction]]') || message.includes('errors.lockedAction')) {
                     message = t('lockedAction');
                 }
@@ -385,3 +531,4 @@ $(document).ready(function() {
         app.alertError._adminChatsWrapped = true;
     }
 });
+
