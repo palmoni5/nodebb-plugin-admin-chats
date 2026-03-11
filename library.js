@@ -12,6 +12,7 @@ const plugin = {};
 const LOCK_PREFIX = '[admin-chat-lock]';
 const LOCKED_MESSAGE_TEXT = '🔒 חדר זה ננעל ע"י המנהלים.';
 const ADMIN_CHATS_PRIVILEGE = 'admin-chats:view';
+const ADMIN_CHATS_MANAGE_PRIVILEGE = 'admin-chats:manage';
 
 async function getLockedActionMessage(uid) {
     try {
@@ -42,12 +43,26 @@ async function canAccessAdminChats(uid) {
         return false;
     }
 
-    const [isAdmin, canView] = await Promise.all([
+    const [isAdmin, canView, canManage] = await Promise.all([
         User.isAdministrator(uid),
         privileges.global.can(ADMIN_CHATS_PRIVILEGE, uid),
+        privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, uid),
     ]);
 
-    return isAdmin || canView;
+    return isAdmin || canView || canManage;
+}
+
+async function canManageAdminChats(uid) {
+    if (!uid) {
+        return false;
+    }
+
+    const [isAdmin, canManage] = await Promise.all([
+        User.isAdministrator(uid),
+        privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, uid),
+    ]);
+
+    return isAdmin || canManage;
 }
 
 async function isUserMemberOfRoom(uid, roomId) {
@@ -70,6 +85,11 @@ plugin.registerPrivileges = async function (data) {
 
     data.privileges.set(ADMIN_CHATS_PRIVILEGE, {
         label: '[[admin-chats:admin-chats-view]]',
+        type: 'moderation',
+    });
+
+    data.privileges.set(ADMIN_CHATS_MANAGE_PRIVILEGE, {
+        label: '[[admin-chats:admin-chats-manage]]',
         type: 'moderation',
     });
 
@@ -161,12 +181,13 @@ plugin.addScripts = async function (data) {
     };
 
     const isAdmin = uid ? await User.isAdministrator(uid) : false;
-    const adminChatsAccess = uid ? (isAdmin || await privileges.global.can(ADMIN_CHATS_PRIVILEGE, uid)) : false;
+    const adminChatsManage = uid ? (isAdmin || await privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, uid)) : false;
+    const adminChatsAccess = uid ? (isAdmin || adminChatsManage || await privileges.global.can(ADMIN_CHATS_PRIVILEGE, uid)) : false;
 
     data.scripts = data.scripts || [];
     data.scripts.push({
         src: false,
-        script: `window.adminChatsTranslations = ${JSON.stringify(translations)}; window.adminChatsAccess = ${adminChatsAccess}; window.adminChatsIsAdmin = ${isAdmin};`
+        script: `window.adminChatsTranslations = ${JSON.stringify(translations)}; window.adminChatsAccess = ${adminChatsAccess}; window.adminChatsIsAdmin = ${isAdmin}; window.adminChatsCanManage = ${adminChatsManage};`
     });
 
     return data;
@@ -203,8 +224,11 @@ plugin.addProfileLink = async function (data) {
 };
 
 plugin.isRoomOwner = async function (payload) {
-    const isAdmin = await User.isAdministrator(payload.uid);
-    if (isAdmin) {
+    const [isAdmin, canManage] = await Promise.all([
+        User.isAdministrator(payload.uid),
+        canManageAdminChats(payload.uid),
+    ]);
+    if (isAdmin || canManage) {
         payload.isOwner = true;
     }
     return payload;
@@ -222,13 +246,15 @@ plugin.canReply = async function (payload) {
     const uid = getCallerUid(payload);
     const roomId = getRoomId(payload);
 
-    const [isAdmin, canView] = await Promise.all([
+    const [isAdmin, canView, canManage] = await Promise.all([
         User.isAdministrator(uid),
         privileges.global.can(ADMIN_CHATS_PRIVILEGE, uid),
+        privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, uid),
     ]);
-    const hasAccess = isAdmin || canView;
+    const isManager = isAdmin || canManage;
+    const hasAccess = isAdmin || canView || canManage;
 
-    if (isAdmin) {
+    if (isManager) {
         payload.canReply = true;
         return payload;
     }
@@ -260,6 +286,10 @@ plugin.filterMessagingSend = async function (payload) {
         return payload;
     }
 
+    if (await canManageAdminChats(uid)) {
+        return payload;
+    }
+
     if (await canAccessAdminChats(uid)) {
         const isMember = await isUserMemberOfRoom(uid, roomId);
         if (!isMember) {
@@ -275,6 +305,9 @@ plugin.filterMessagingSend = async function (payload) {
     return payload;
 };
 plugin.filterAddUsersToRoom = async function (payload) {
+    if (await canManageAdminChats(payload.uid)) {
+        return payload;
+    }
     if (await canNonAdminModifyLockedRoom(payload.uid, payload.roomId)) {
         const message = await getLockedActionMessage(payload.uid);
         throw new Error(message);
@@ -283,6 +316,9 @@ plugin.filterAddUsersToRoom = async function (payload) {
 };
 
 plugin.filterRemoveUsersFromRoom = async function (payload) {
+    if (await canManageAdminChats(payload.uid)) {
+        return payload;
+    }
     if (await canNonAdminModifyLockedRoom(payload.uid, payload.roomId)) {
         const message = await getLockedActionMessage(payload.uid);
         throw new Error(message);
@@ -291,6 +327,9 @@ plugin.filterRemoveUsersFromRoom = async function (payload) {
 };
 
 plugin.filterRenameRoom = async function (payload) {
+    if (await canManageAdminChats(payload.uid)) {
+        return payload;
+    }
     if (await canNonAdminModifyLockedRoom(payload.uid, payload.roomId)) {
         const message = await getLockedActionMessage(payload.uid);
         throw new Error(message);
@@ -325,14 +364,16 @@ plugin.onLoadRoom = async function (payload) {
         return payload;
     }
 
-    const [isAdmin, canView] = await Promise.all([
+    const [isAdmin, canView, canManage] = await Promise.all([
         User.isAdministrator(uid),
         privileges.global.can(ADMIN_CHATS_PRIVILEGE, uid),
+        privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, uid),
     ]);
-    const hasAccess = isAdmin || canView;
+    const isManager = isAdmin || canManage;
+    const hasAccess = isAdmin || canView || canManage;
 
     const lockData = await getRoomLockData(room.roomId);
-    const isLockedForUser = lockData.isLocked && !isAdmin;
+    const isLockedForUser = lockData.isLocked && !isManager;
 
     room.adminChatLock = lockData;
     room.messages = ensureFirstVisibleMessageHeader(buildRoomMessagesWithLockNotice(room.messages, lockData));
@@ -390,16 +431,21 @@ plugin.onLoadRoom = async function (payload) {
         }
     }
 
-    if (!isAdmin && !isOfficialMember) {
+    if (!isManager && !isOfficialMember) {
         room.canReply = false;
         room.showUserInput = false;
     }
 
-    room.isAdmin = isAdmin;
-    if (isAdmin) {
+    room.isAdmin = isManager;
+    room.isAdminOrGlobalMod = isManager;
+    payload.isAdminOrGlobalMod = isManager;
+    if (isManager) {
         room.isOwner = true;
     }
     room.adminChatsAccess = hasAccess;
+    payload.adminChatsAccess = hasAccess;
+    payload.adminChatsCanManage = isManager;
+    payload.adminChatsIsAdmin = isAdmin;
 
     return payload;
 };
@@ -430,7 +476,7 @@ function overrideChatsApi() {
 
     const originalKick = ChatsAPI.kick;
     const wrappedKick = async function (caller, data) {
-        if (caller && !await User.isAdministrator(caller.uid) && data && data.roomId && Array.isArray(data.uids) && data.uids.length === 1 && parseInt(data.uids[0], 10) === parseInt(caller.uid, 10) && await isRoomLocked(data.roomId)) {
+        if (caller && !await User.isAdministrator(caller.uid) && !await canManageAdminChats(caller.uid) && data && data.roomId && Array.isArray(data.uids) && data.uids.length === 1 && parseInt(data.uids[0], 10) === parseInt(caller.uid, 10) && await isRoomLocked(data.roomId)) {
             const message = await getLockedActionMessage(caller.uid);
             throw new Error(message);
         }
@@ -452,6 +498,10 @@ function overrideMessagingFunctions() {
             return true;
         }
 
+        if (await canManageAdminChats(uid)) {
+            return true;
+        }
+
         const roomId = await getMessageRoomId(messageId);
         if (roomId && await isRoomLocked(roomId)) {
             const message = await getLockedActionMessage(uid);
@@ -463,6 +513,10 @@ function overrideMessagingFunctions() {
 
     Messaging.canDelete = async function (messageId, uid) {
         if (await User.isAdministrator(uid)) {
+            return true;
+        }
+
+        if (await canManageAdminChats(uid)) {
             return true;
         }
 
@@ -485,13 +539,15 @@ function overrideMessagingFunctions() {
     if (typeof originalCanReply === 'function') {
         Messaging.canReply = async function (...args) {
             const guessed = guessRoomIdUidFromArgs(args);
-            const [isAdmin, canView] = await Promise.all([
+            const [isAdmin, canView, canManage] = await Promise.all([
                 User.isAdministrator(guessed.uid),
                 privileges.global.can(ADMIN_CHATS_PRIVILEGE, guessed.uid),
+                privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, guessed.uid),
             ]);
-            const hasAccess = isAdmin || canView;
+            const isManager = isAdmin || canManage;
+            const hasAccess = isAdmin || canView || canManage;
 
-            if (isAdmin) {
+            if (isManager) {
                 return true;
             }
             if (guessed.roomId && hasAccess) {
@@ -564,6 +620,25 @@ function registerRoutes(app, router, middleware) {
         }
     });
 
+    
+    router.get('/api/admin-chats/privileges', ...routeMiddleware, async (req, res) => {
+        try {
+            if (!await assertAdminChatsAccess(req, res)) {
+                return;
+            }
+
+            const isAdmin = await User.isAdministrator(req.uid);
+            const canManage = isAdmin || await privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, req.uid);
+            res.json({
+                adminChatsAccess: true,
+                adminChatsCanManage: canManage,
+                adminChatsIsAdmin: isAdmin,
+            });
+        } catch (err) {
+            res.status(500).json({ status: { code: 'error', message: err.message } });
+        }
+    });
+
     router.get('/api/admin-chats/page/:roomId?/:index?', ...routeMiddleware, async (req, res) => {
         try {
             if (!await assertAdminChatsAccess(req, res)) {
@@ -586,8 +661,8 @@ function registerRoutes(app, router, middleware) {
                 return res.status(400).json({ status: { code: 'bad-request', message: 'Invalid room id' } });
             }
 
-            if (!await User.isAdministrator(actingUid)) {
-                return res.status(403).json({ status: { code: 'forbidden', message: 'Admin only' } });
+            if (!await User.isAdministrator(actingUid) && !await canManageAdminChats(actingUid)) {
+                return res.status(403).json({ status: { code: 'forbidden', message: 'Admin or manage privilege required' } });
             }
 
             if (!await roomExists(roomId)) {
@@ -638,11 +713,13 @@ async function assertAdminChatsAccess(req, res) {
 
 async function buildAdminChatsPayload(req) {
     const userslug = await User.getUserField(req.uid, 'userslug');
-    const [isAdmin, canView] = await Promise.all([
+    const [isAdmin, canView, canManage] = await Promise.all([
         User.isAdministrator(req.uid),
         privileges.global.can(ADMIN_CHATS_PRIVILEGE, req.uid),
+        privileges.global.can(ADMIN_CHATS_MANAGE_PRIVILEGE, req.uid),
     ]);
-    const adminChatsAccess = isAdmin || canView;
+    const adminChatsManage = isAdmin || canManage;
+    const adminChatsAccess = isAdmin || canView || canManage;
     const [recentChats, publicRooms, privateRoomCount] = await Promise.all([
         getAdminRecentChats(req.uid, 0, ADMIN_CHAT_PAGE_SIZE),
         Messaging.getPublicRooms(req.uid, req.uid),
@@ -656,6 +733,7 @@ async function buildAdminChatsPayload(req) {
         adminAllChats: true,
         adminChatsAccess,
         adminChatsIsAdmin: isAdmin,
+        adminChatsCanManage: adminChatsManage,
         rooms: recentChats.rooms,
         nextStart: recentChats.nextStart,
         publicRooms: publicRooms || [],
@@ -852,6 +930,10 @@ async function canNonAdminModifyLockedRoom(uid, roomId) {
         return false;
     }
 
+    if (await canManageAdminChats(uid)) {
+        return false;
+    }
+
     return await isRoomLocked(roomId);
 }
 async function roomExists(roomId) {
@@ -988,35 +1070,3 @@ function getRoomId(payload) {
 }
 
 module.exports = plugin;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

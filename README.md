@@ -4,8 +4,8 @@ A professional administration plugin for NodeBB that allows administrators to mo
 
 ## Main Features
 
-* **Global Chat Access**: Administrators can view any private or group conversation.
-* **Management Privileges**: Grants admins the ability to edit or delete any message in any room.
+* **Global Chat Access**: Administrators and users with chat view permission can view any private or group conversation.
+* **Management Privileges**: Administrators and users with chat management permission can edit or delete any message in any room.
 * **Admin Room Locking**: Administrators can lock any chat room so only admins can continue replying.
 * **Profile Integration**: Adds a "View Chats" button to the user profile menu for administrators to quickly audit a user's interactions.
 * **Non-Intrusive Monitoring**: Admins can load and view room history without being added as permanent members, maintaining a clean member list.
@@ -16,7 +16,13 @@ A professional administration plugin for NodeBB that allows administrators to mo
 ### Plugin Information
 * **Name**: Super Admin Chat Control
 * **ID**: `nodebb-plugin-admin-chats`
-* **Compatibility**: NodeBB versions `^3.0.0` or `^4.0.0`
+* **Compatibility**: NodeBB version `^4.0.0`
+
+### Permissions
+The plugin exposes two global permissions in the ACP:
+
+* `admin-chats:view`: View any chat room and load history (read-only access).
+* `admin-chats:manage`: Manage any chat room (edit/delete messages, lock/unlock rooms, and other moderator-level actions).
 
 ### Chat Route Behavior (`/chats`)
 NodeBB exposes a core route at `/chats` (and `/chats/:roomId/:index?`) that redirects logged-in users to their personal chat page under `/user/:userslug/chats/...`.
@@ -57,5 +63,4 @@ The plugin includes a `client.js` script that:
 * Cleans up the chat UI empty states for a better admin experience.
 
 ---
-*Developed by [palmoni5](https://github.com/palmoni5/nodebb-plugin-admin-chats).*
-
+*Developed by [palmoni5](https://github.com/palmoni5/nodebb-plugin-admin-chats).* 

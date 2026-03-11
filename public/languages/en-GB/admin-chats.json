@@ -6,5 +6,6 @@
   "profile.viewChats": "View Chats",
   "empty.selectChat": "Please select a chat from the sidebar.",
   "errors.lockedAction": "This action cannot be performed in a locked room.",
-  "admin-chats-view": "View all chats"
+  "admin-chats-view": "View all chats",
+  "admin-chats-manage": "Manage chat rooms"
 }

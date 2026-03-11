@@ -1,4 +1,6 @@
 $(document).ready(function() {
+    syncAdminAccessFromAjaxify();
+    fetchAdminPrivileges();
     const LOCK_PREFIX = '[admin-chat-lock]';
     const roomStateCache = new Map();
     const TEXT = {
@@ -25,52 +27,105 @@ $(document).ready(function() {
     function isEnglishSystem() {
         return $('html').attr('lang') && $('html').attr('lang').startsWith('en');
     }
-
     function t(key) {
-    const dict = isEnglishSystem() ? TEXT.en : TEXT.he;
-    return dict[key];
-}
-
-function hasAdminChatsAccess() {
-    return !!((ajaxify && ajaxify.data && ajaxify.data.adminChatsAccess) || window.adminChatsAccess || (app.user && app.user.isAdmin));
-}
-
-function isAdminUser() {
-    return !!((ajaxify && ajaxify.data && ajaxify.data.adminChatsIsAdmin) || window.adminChatsIsAdmin || (app.user && app.user.isAdmin));
-}
-
-let adminChatsAccessProbe = null;
-
-function resolveAdminChatsAccess() {
-    if (hasAdminChatsAccess()) {
-        return Promise.resolve(true);
+        const dict = isEnglishSystem() ? TEXT.en : TEXT.he;
+        return dict[key];
     }
-    if (window.adminChatsAccessChecked) {
-        return Promise.resolve(false);
+
+    function hasAdminChatsAccess() {
+        return !!((ajaxify && ajaxify.data && (ajaxify.data.adminChatsAccess || ajaxify.data.adminChatsCanManage)) || window.adminChatsAccess || window.adminChatsCanManage || (app.user && app.user.isAdmin));
     }
-    if (adminChatsAccessProbe) {
+
+    function isAdminUser() {
+        return !!((ajaxify && ajaxify.data && ajaxify.data.adminChatsIsAdmin) || window.adminChatsIsAdmin || (app.user && app.user.isAdmin));
+    }
+
+    async function fetchAdminPrivileges() {
+        if (!hasAdminChatsAccess() || window.adminChatsPrivilegesPending) {
+            return;
+        }
+
+        window.adminChatsPrivilegesPending = true;
+        try {
+            const response = await fetch(`${config.relative_path || ''}/api/admin-chats/privileges`, {
+                headers: {
+                    'x-csrf-token': config.csrf_token,
+                },
+                credentials: 'same-origin',
+            });
+
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = await response.json();
+            if (payload && typeof payload.adminChatsAccess === 'boolean') {
+                window.adminChatsAccess = payload.adminChatsAccess;
+            }
+            if (payload && typeof payload.adminChatsCanManage === 'boolean') {
+                window.adminChatsCanManage = payload.adminChatsCanManage;
+            }
+            if (payload && typeof payload.adminChatsIsAdmin === 'boolean') {
+                window.adminChatsIsAdmin = payload.adminChatsIsAdmin;
+            }
+        } catch (err) {
+            // ignore
+        } finally {
+            window.adminChatsPrivilegesPending = false;
+        }
+    }
+
+    function syncAdminAccessFromAjaxify() {
+        if (!ajaxify || !ajaxify.data) {
+            return;
+        }
+        if (typeof ajaxify.data.adminChatsAccess === 'boolean') {
+            window.adminChatsAccess = ajaxify.data.adminChatsAccess;
+        }
+        if (typeof ajaxify.data.adminChatsCanManage === 'boolean') {
+            window.adminChatsCanManage = ajaxify.data.adminChatsCanManage;
+        }
+        if (typeof ajaxify.data.adminChatsIsAdmin === 'boolean') {
+            window.adminChatsIsAdmin = ajaxify.data.adminChatsIsAdmin;
+        }
+    }
+
+    function canManageChats() {
+        return !!((ajaxify && ajaxify.data && ajaxify.data.adminChatsCanManage) || window.adminChatsCanManage || isAdminUser());
+    }
+
+    let adminChatsAccessProbe = null;
+
+    function resolveAdminChatsAccess() {
+        if (hasAdminChatsAccess()) {
+            return Promise.resolve(true);
+        }
+        if (window.adminChatsAccessChecked) {
+            return Promise.resolve(false);
+        }
+        if (adminChatsAccessProbe) {
+            return adminChatsAccessProbe;
+        }
+
+        adminChatsAccessProbe = fetch(`${config.relative_path || ''}/api/admin-chats?start=0`, {
+            headers: {
+                'x-csrf-token': config.csrf_token,
+            },
+            credentials: 'same-origin',
+        }).then((response) => {
+            const ok = response && response.ok;
+            window.adminChatsAccess = ok;
+            return ok;
+        }).catch(() => {
+            window.adminChatsAccess = false;
+            return false;
+        }).finally(() => {
+            window.adminChatsAccessChecked = true;
+            adminChatsAccessProbe = null;
+        });
+
         return adminChatsAccessProbe;
     }
-
-    adminChatsAccessProbe = fetch(`${config.relative_path || ''}/api/admin-chats?start=0`, {
-        headers: {
-            'x-csrf-token': config.csrf_token,
-        },
-        credentials: 'same-origin',
-    }).then((response) => {
-        const ok = response && response.ok;
-        window.adminChatsAccess = ok;
-        return ok;
-    }).catch(() => {
-        window.adminChatsAccess = false;
-        return false;
-    }).finally(() => {
-        window.adminChatsAccessChecked = true;
-        adminChatsAccessProbe = null;
-    });
-
-    return adminChatsAccessProbe;
-}
 
     // Get lockedAction message from server translations only (based on forum settings)
     function getLockedActionMessage() {
@@ -288,19 +343,50 @@ function resolveAdminChatsAccess() {
             credentials: 'same-origin',
         });
         if (!response.ok) {
+            if (hasAdminChatsAccess() && !isAdminAllChatsPage()) {
+                const adminResponse = await fetch(`${config.relative_path || ''}/api/admin-chats/page/${roomId}`, {
+                    headers: {
+                        'x-csrf-token': config.csrf_token,
+                    },
+                    credentials: 'same-origin',
+                });
+                if (!adminResponse.ok) {
+                    return null;
+                }
+                const adminPayload = await adminResponse.json();
+                const adminRoom = adminPayload && adminPayload.roomId ? adminPayload : (adminPayload && adminPayload.room ? adminPayload.room : null);
+                if (adminRoom) {
+                    setCachedRoomData(roomId, adminRoom);
+                }
+                return adminRoom;
+            }
             return null;
         }
 
         const payload = await response.json();
         const roomData = payload && payload.roomId ? payload : (payload && payload.room ? payload.room : null);
+        if (roomData && !roomData.adminChatLock && hasAdminChatsAccess() && !isAdminAllChatsPage()) {
+            const adminResponse = await fetch(`${config.relative_path || ''}/api/admin-chats/page/${roomId}`, {
+                headers: {
+                    'x-csrf-token': config.csrf_token,
+                },
+                credentials: 'same-origin',
+            });
+            if (adminResponse.ok) {
+                const adminPayload = await adminResponse.json();
+                const adminRoom = adminPayload && adminPayload.roomId ? adminPayload : (adminPayload && adminPayload.room ? adminPayload.room : null);
+                if (adminRoom && adminRoom.adminChatLock) {
+                    roomData.adminChatLock = adminRoom.adminChatLock;
+                }
+            }
+        }
         if (roomData) {
             setCachedRoomData(roomId, roomData);
         }
         return roomData;
     }
-
     function isLockedForUser(roomData) {
-        return !!(roomData && roomData.adminChatLock && roomData.adminChatLock.isLocked && !isAdminUser());
+        return !!(roomData && roomData.adminChatLock && roomData.adminChatLock.isLocked && !canManageChats());
     }
 
     function setComposerHidden($window, hidden) {
@@ -355,6 +441,15 @@ function resolveAdminChatsAccess() {
             .toggleClass('hidden', hidden);
     }
 
+    function updateDeleteRestoreVisibility($window) {
+        $window.find('[component="chat/message"]').each(function() {
+            const $message = $(this);
+            const isDeleted = $message.hasClass('deleted');
+            $message.find('[data-action="delete"]').toggleClass('hidden', isDeleted).toggle(!isDeleted);
+            $message.find('[data-action="restore"]').toggleClass('hidden', !isDeleted).toggle(isDeleted);
+        });
+    }
+
     function normalizeLockMessages($window) {
         $window.find('[component="chat/system-message"] > div').each(function() {
             const $el = $(this);
@@ -377,7 +472,7 @@ function resolveAdminChatsAccess() {
     function renderAdminLockControl($window, roomData) {
         $window.find('.admin-chat-lock-toggle-item, .admin-chat-lock-divider, .admin-chat-lock-item-wrap').remove();
 
-        if (!isAdminUser() || !roomData || !roomData.roomId) {
+        if (!canManageChats() || !roomData || !roomData.roomId) {
             return;
         }
 
@@ -423,6 +518,7 @@ function resolveAdminChatsAccess() {
         const hidden = isLockedForUser(roomData);
         setComposerHidden($window, hidden);
         updateLockedActionVisibility($window, hidden);
+        updateDeleteRestoreVisibility($window);
         renderLockBanner($window, hidden);
         renderAdminLockControl($window, roomData);
         normalizeLockMessages($window);
@@ -492,65 +588,9 @@ function resolveAdminChatsAccess() {
         return await response.json();
     }
 
-    async function injectProfileChatsMenu() {
-        const allowed = await resolveAdminChatsAccess();
-        if (!allowed) {
-            return;
-        }
-
-const isUserProfile = $(".account").length && window.location.pathname.includes("/user/");
-        if (!isUserProfile) {
-            return;
-        }
-
-        const userSlug = (ajaxify && ajaxify.data && (ajaxify.data.userslug || (ajaxify.data.user && ajaxify.data.user.userslug))) || null;
-        if (!userSlug) {
-            return;
-        }
-
-        const relativePath = config.relative_path || "";
-        const menuItemHtml = `
-            <li role="presentation" class="admin-chats-profile-link">
-                <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="${relativePath}/user/${userSlug}/chats" role="menuitem">
-                    <i class="far fa-fw fa-comments"></i>
-                    <span>${t("viewChats")}</span>
-                </a>
-            </li>
-        `;
-
-        let menu = $(".account-sub-links");
-        if (!menu.length) {
-            const container = $(".account .flex-shrink-0.d-flex.gap-1").first();
-            const fallbackContainer = container.length ? container : $(".account .flex-shrink-0").first();
-
-            if (fallbackContainer.length) {
-                const menuHtml = `
-                    <div class="btn-group bottom-sheet admin-chats-privileges-menu">
-                        <button type="button" class="btn btn-light dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                            <i class="fa fa-gear fa-fw"></i>
-                        </button>
-                        <ul class="dropdown-menu dropdown-menu-end p-1 text-sm account-sub-links" role="menu"></ul>
-                    </div>
-                `;
-                fallbackContainer.append(menuHtml);
-                menu = fallbackContainer.find(".account-sub-links").last();
-            }
-        }
-
-        if (menu.length) {
-            menu.find(".admin-chats-profile-link").remove();
-            menu.find(".admin-chats-profile-divider").remove();
-            menu.find(`a[href*="/user/${userSlug}/chats"]`).parent().remove();
-            menu.prepend(menuItemHtml);
-
-            const hasOtherItems = menu.find("li").not(".admin-chats-profile-link").length > 0;
-            if (hasOtherItems) {
-                menu.find(".admin-chats-profile-link").after('<li role="presentation" class="dropdown-divider admin-chats-profile-divider"></li>');
-            }
-        }
-    }
-
     $(window).on('action:ajaxify.end', function(ev, data) {
+        syncAdminAccessFromAjaxify();
+        fetchAdminPrivileges();
         const templateName = ajaxify && ajaxify.data && ajaxify.data.template ? ajaxify.data.template.name : '';
 
         if (templateName.startsWith('account/')) {
@@ -620,6 +660,13 @@ const isUserProfile = $(".account").length && window.location.pathname.includes(
         setTimeout(refreshChatUi, 0);
     });
 
+    if (window.socket) {
+        socket.removeListener('event:chats.delete', refreshChatUi);
+        socket.removeListener('event:chats.restore', refreshChatUi);
+        socket.on('event:chats.delete', function() { setTimeout(refreshChatUi, 0); });
+        socket.on('event:chats.restore', function() { setTimeout(refreshChatUi, 0); });
+    }
+
     // Handle browser back/forward navigation
     $(window).on('popstate', function() {
         if (isAdminAllChatsPage()) {
@@ -655,6 +702,16 @@ const isUserProfile = $(".account").length && window.location.pathname.includes(
         }
     }
 
+    $(document).on('click', '[data-action="delete"], [data-action="restore"]', function() {
+        const $window = $(this).closest('[component="chat/message/window"]');
+        if (!$window.length) {
+            return;
+        }
+        setTimeout(function() {
+            updateDeleteRestoreVisibility($window);
+        }, 50);
+    });
+
     $(document).on('click', '.admin-chat-lock-toggle-item', async function(ev) {
         ev.preventDefault();
 
@@ -673,7 +730,7 @@ const isUserProfile = $(".account").length && window.location.pathname.includes(
             const currentRoom = ajaxify && ajaxify.data && (ajaxify.data.room || ajaxify.data);
             if (currentRoom && parseInt(currentRoom.roomId, 10) === roomId) {
                 currentRoom.adminChatLock = result.lockData;
-                currentRoom.canReply = !result.lockData.isLocked || isAdminUser();
+                currentRoom.canReply = !result.lockData.isLocked || canManageChats();
                 currentRoom.showUserInput = currentRoom.canReply;
                 if (ajaxify.data.room) {
                     ajaxify.data.room.adminChatLock = result.lockData;
@@ -684,7 +741,7 @@ const isUserProfile = $(".account").length && window.location.pathname.includes(
 
             const cached = getCachedRoomData(roomId) || { roomId };
             cached.adminChatLock = result.lockData;
-            cached.canReply = !result.lockData.isLocked || isAdminUser();
+            cached.canReply = !result.lockData.isLocked || canManageChats();
             cached.showUserInput = cached.canReply;
             setCachedRoomData(roomId, cached);
             await refreshChatUi();
@@ -708,13 +765,3 @@ const isUserProfile = $(".account").length && window.location.pathname.includes(
         app.alertError._adminChatsWrapped = true;
     }
 });
-
-
-
-
-
-
-
-
-
-
