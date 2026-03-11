@@ -588,6 +588,64 @@ $(document).ready(function() {
         return await response.json();
     }
 
+    async function injectProfileChatsMenu() {
+        const allowed = await resolveAdminChatsAccess();
+        if (!allowed) {
+            return;
+        }
+
+        const isUserProfile = $(".account").length && window.location.pathname.includes("/user/");
+        if (!isUserProfile) {
+            return;
+        }
+
+        const userSlug = (ajaxify && ajaxify.data && (ajaxify.data.userslug || (ajaxify.data.user && ajaxify.data.user.userslug))) || null;
+        if (!userSlug) {
+            return;
+        }
+
+        const relativePath = config.relative_path || "";
+        const menuItemHtml = `
+            <li role="presentation" class="admin-chats-profile-link">
+                <a class="dropdown-item rounded-1 d-flex align-items-center gap-2" href="${relativePath}/user/${userSlug}/chats" role="menuitem">
+                    <i class="far fa-fw fa-comments"></i>
+                    <span>${t("viewChats")}</span>
+                </a>
+            </li>
+        `;
+
+        let menu = $(".account-sub-links");
+        if (!menu.length) {
+            const container = $(".account .flex-shrink-0.d-flex.gap-1").first();
+            const fallbackContainer = container.length ? container : $(".account .flex-shrink-0").first();
+
+            if (fallbackContainer.length) {
+                const menuHtml = `
+                    <div class="btn-group bottom-sheet admin-chats-privileges-menu">
+                        <button type="button" class="btn btn-light dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fa fa-gear fa-fw"></i>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end p-1 text-sm account-sub-links" role="menu"></ul>
+                    </div>
+                `;
+                fallbackContainer.append(menuHtml);
+                menu = fallbackContainer.find(".account-sub-links").last();
+            }
+        }
+
+        if (menu.length) {
+            menu.find(".admin-chats-profile-link").remove();
+            menu.find(".admin-chats-profile-divider").remove();
+            menu.find(`a[href*="/user/${userSlug}/chats"]`).parent().remove();
+            menu.prepend(menuItemHtml);
+
+            const hasOtherItems = menu.find("li").not(".admin-chats-profile-link").length > 0;
+            if (hasOtherItems) {
+                menu.find(".admin-chats-profile-link").after('<li role="presentation" class="dropdown-divider admin-chats-profile-divider"></li>');
+            }
+        }
+    }
+
     $(window).on('action:ajaxify.end', function(ev, data) {
         syncAdminAccessFromAjaxify();
         fetchAdminPrivileges();
