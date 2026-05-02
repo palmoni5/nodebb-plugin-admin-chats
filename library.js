@@ -113,7 +113,6 @@ async function getLockedActionMessage(uid) {
     }
 }
 const ADMIN_CHAT_PAGE_SIZE = 30;
-const ADMIN_CHAT_SCAN_SIZE = 100;
 
 async function canAccessAdminChats(uid) {
     if (!uid) {
@@ -970,40 +969,55 @@ async function getPrivateRoomCount() {
 }
 
 async function getAdminRecentChats(uid, start, limit) {
-    let cursor = Math.max(0, parseInt(start, 10) || 0);
-    const roomPairs = [];
+    const offset = Math.max(0, parseInt(start, 10) || 0);
+    const pageSize = Math.max(0, parseInt(limit, 10) || 0);
+    const allRoomIds = await db.getSortedSetRevRange('chat:rooms', 0, -1);
 
-    while (roomPairs.length < limit) {
-        const roomIds = await db.getSortedSetRevRange('chat:rooms', cursor, cursor + ADMIN_CHAT_SCAN_SIZE - 1);
-        if (!roomIds.length) {
-            break;
-        }
-
-        const rooms = await Messaging.getRoomsData(roomIds);
-        rooms.forEach((room, index) => {
-            if (room && !room.public && roomPairs.length < limit) {
-                roomPairs.push({
-                    roomId: roomIds[index],
-                    room,
-                });
-            }
-        });
-
-        cursor += roomIds.length;
-        if (roomIds.length < ADMIN_CHAT_SCAN_SIZE) {
-            break;
-        }
+    if (!allRoomIds.length || !pageSize) {
+        return {
+            rooms: [],
+            nextStart: offset,
+        };
     }
 
-    const rooms = roomPairs.map(item => item.room);
-    const roomIds = roomPairs.map(item => item.roomId);
+    const allRooms = await Messaging.getRoomsData(allRoomIds);
+    const roomPairs = (await Promise.all(allRooms.map(async (room, index) => {
+        const roomId = parseInt(allRoomIds[index], 10) || 0;
+        if (!room || room.public || !roomId) {
+            return null;
+        }
+
+        return {
+            roomId,
+            room,
+            lastActivity: await getAdminRoomLastActivity(roomId, room),
+        };
+    }))).filter(Boolean);
+
+    roomPairs.sort((a, b) => (
+        b.lastActivity - a.lastActivity ||
+        b.roomId - a.roomId
+    ));
+
+    const pagedRooms = roomPairs.slice(offset, offset + pageSize);
+    const rooms = pagedRooms.map(item => item.room);
+    const roomIds = pagedRooms.map(item => item.roomId);
 
     await enrichAdminRecentRooms(uid, roomIds, rooms);
 
     return {
         rooms,
-        nextStart: cursor,
+        nextStart: offset + rooms.length,
     };
+}
+
+async function getAdminRoomLastActivity(roomId, room) {
+    const lastMessage = await db.getSortedSetRevRangeWithScores(`chat:room:${roomId}:mids`, 0, 0);
+    if (lastMessage.length) {
+        return parseInt(lastMessage[0].score, 10) || 0;
+    }
+
+    return parseInt(room && room.timestamp, 10) || 0;
 }
 
 async function enrichAdminRecentRooms(uid, roomIds, rooms) {
@@ -1240,7 +1254,6 @@ function getRoomId(payload) {
 }
 
 module.exports = plugin;
-
 
 
 
