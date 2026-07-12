@@ -7,6 +7,7 @@ const db = require.main.require('./src/database');
 const meta = require.main.require('./src/meta');
 const privileges = require.main.require('./src/privileges');
 const helpers = require.main.require('./src/controllers/helpers');
+const validator = require.main.require('validator');
 const fs = require('fs');
 const path = require('path');
 
@@ -15,6 +16,15 @@ const LOCK_PREFIX = '[admin-chat-lock]';
 const LOCKED_MESSAGE_TEXT_KEY = 'lock.banner';
 const ADMIN_CHATS_PRIVILEGE = 'admin-chats:view';
 const ADMIN_CHATS_MANAGE_PRIVILEGE = 'admin-chats:manage';
+
+// Per-message edit-history storage. Each edit appends the *previous* (pre-edit)
+// version as a JSON string, oldest first. Deliberately kept out of every payload,
+// hook and template the plugin exposes — the only way to read it back is the
+// hidden routes registered in registerRoutes(), whose paths are not linked
+// anywhere in the UI. Access is still gated by admin-chats privileges.
+function editHistoryKey(mid) {
+    return `message:${mid}:editHistory`;
+}
 
 // Load translations from language files
 const translations = {};
@@ -113,6 +123,7 @@ async function getLockedActionMessage(uid) {
     }
 }
 const ADMIN_CHAT_PAGE_SIZE = 30;
+const ADMIN_CHAT_SCAN_SIZE = 100;
 
 async function canAccessAdminChats(uid) {
     if (!uid) {
@@ -639,6 +650,51 @@ function overrideMessagingFunctions() {
     const originalCanViewMessage = Messaging.canViewMessage;
     const originalCanReply = Messaging.canReply;
 
+    if (typeof Messaging.editMessage === 'function' && !Messaging.editMessage._adminChatsHistoryWrapped) {
+        const originalEditMessage = Messaging.editMessage;
+
+        const wrappedEditMessage = async function (uid, mid, roomId, content) {
+            let previous = null;
+            try {
+                const [oldContent, fields] = await Promise.all([
+                    Messaging.getMessageField(mid, 'content'),
+                    Messaging.getMessageFields(mid, ['fromuid', 'timestamp', 'edited']),
+                ]);
+                // Only snapshot when the content actually changes, mirroring core's
+                // no-op short-circuit so history stays in step with real edits.
+                if (typeof oldContent === 'string' && oldContent !== content) {
+                    previous = {
+                        content: oldContent,
+                        fromuid: parseInt(fields && fields.fromuid, 10) || 0,
+                        editedByUid: parseInt(uid, 10) || 0,
+                        // When this version stopped being current (i.e. now).
+                        replacedAt: Date.now(),
+                        // The edit stamp this version carried before being replaced.
+                        previousEdited: parseInt(fields && fields.edited, 10) ||
+                            parseInt(fields && fields.timestamp, 10) || 0,
+                    };
+                }
+            } catch (err) {
+                previous = null;
+            }
+
+            const result = await originalEditMessage.call(this, uid, mid, roomId, content);
+
+            if (previous) {
+                try {
+                    await db.listAppend(editHistoryKey(mid), JSON.stringify(previous));
+                } catch (err) {
+                    // History is best-effort; never break an edit because of it.
+                }
+            }
+
+            return result;
+        };
+
+        wrappedEditMessage._adminChatsHistoryWrapped = true;
+        Messaging.editMessage = wrappedEditMessage;
+    }
+
     Messaging.canEdit = async function (messageId, uid) {
         if (await User.isAdministrator(uid)) {
             return true;
@@ -852,6 +908,185 @@ function registerRoutes(app, router, middleware) {
             return res.status(500).json({ status: { code: 'error', message: err.message } });
         }
     });
+
+    // --- Hidden chat edit-history viewer ---------------------------------
+    // These two routes are intentionally NOT referenced from any template,
+    // client script, menu or API payload. They do not appear in the admin
+    // chats UI, so a "regular" administrator who has not read this source
+    // will never encounter them. They are still protected by
+    // assertAdminChatsAccess(), so only privileged accounts can read data
+    // even if the URL is discovered. Paths:
+    //   GET /api/admin-chats/history/:mid   -> JSON
+    //   GET /admin-chats/history/:mid       -> standalone HTML page
+    router.get('/api/admin-chats/history/:mid', ...routeMiddleware, async (req, res) => {
+        try {
+            if (!await assertAdminChatsAccess(req, res)) {
+                return;
+            }
+
+            const mid = parseInt(req.params.mid, 10);
+            if (Number.isNaN(mid)) {
+                return res.status(400).json({ status: { code: 'bad-request', message: 'Invalid message id' } });
+            }
+
+            const history = await getMessageEditHistory(mid);
+            return res.json({
+                status: { code: 'ok', message: 'Edit history retrieved' },
+                ...history,
+            });
+        } catch (err) {
+            return res.status(500).json({ status: { code: 'error', message: err.message } });
+        }
+    });
+
+    router.get('/admin-chats/history/:mid', ...routeMiddleware, async (req, res) => {
+        try {
+            if (!await assertAdminChatsAccess(req, res)) {
+                return;
+            }
+
+            const mid = parseInt(req.params.mid, 10);
+            if (Number.isNaN(mid)) {
+                return res.status(400).type('html').send('<h1>400</h1><p>Invalid message id</p>');
+            }
+
+            const history = await getMessageEditHistory(mid);
+            return res.type('html').send(renderMessageHistoryHtml(history));
+        } catch (err) {
+            return res.status(500).type('html').send(`<h1>500</h1><pre>${validator.escape(String(err.message))}</pre>`);
+        }
+    });
+}
+
+async function getMessageEditHistory(mid) {
+    const [exists, current, rawHistory] = await Promise.all([
+        Messaging.messageExists(mid),
+        Messaging.getMessageFields(mid, ['content', 'fromuid', 'timestamp', 'edited', 'roomId', 'deleted']),
+        db.getListRange(editHistoryKey(mid), 0, -1),
+    ]);
+
+    const revisions = (rawHistory || []).map((item) => {
+        try {
+            return JSON.parse(item);
+        } catch (err) {
+            return null;
+        }
+    }).filter(Boolean);
+
+    // Resolve usernames for the author and every editor in one lookup.
+    const uidSet = new Set();
+    const authorUid = parseInt(current && current.fromuid, 10) || 0;
+    if (authorUid) {
+        uidSet.add(authorUid);
+    }
+    revisions.forEach((rev) => {
+        if (rev.editedByUid) {
+            uidSet.add(parseInt(rev.editedByUid, 10) || 0);
+        }
+        if (rev.fromuid) {
+            uidSet.add(parseInt(rev.fromuid, 10) || 0);
+        }
+    });
+    uidSet.delete(0);
+
+    const uids = [...uidSet];
+    const userMap = new Map();
+    if (uids.length) {
+        const users = await User.getUsersFields(uids, ['uid', 'username', 'userslug']);
+        uids.forEach((uid, index) => {
+            if (users[index]) {
+                userMap.set(uid, users[index]);
+            }
+        });
+    }
+
+    const decorate = (uid) => {
+        const numeric = parseInt(uid, 10) || 0;
+        const user = userMap.get(numeric);
+        return {
+            uid: numeric,
+            username: user ? user.username : (numeric ? `uid ${numeric}` : '—'),
+        };
+    };
+
+    return {
+        mid,
+        exists: !!exists,
+        roomId: parseInt(current && current.roomId, 10) || 0,
+        author: decorate(authorUid),
+        current: {
+            content: current ? String(current.content || '') : '',
+            edited: parseInt(current && current.edited, 10) || 0,
+            timestamp: parseInt(current && current.timestamp, 10) || 0,
+            deleted: parseInt(current && current.deleted, 10) === 1,
+        },
+        revisionCount: revisions.length,
+        revisions: revisions.map((rev) => ({
+            content: String(rev.content || ''),
+            editor: decorate(rev.editedByUid),
+            replacedAt: parseInt(rev.replacedAt, 10) || 0,
+            previousEdited: parseInt(rev.previousEdited, 10) || 0,
+        })),
+    };
+}
+
+function renderMessageHistoryHtml(history) {
+    const esc = (value) => validator.escape(String(value == null ? '' : value));
+    const fmt = (ts) => {
+        const numeric = parseInt(ts, 10) || 0;
+        return numeric ? new Date(numeric).toISOString().replace('T', ' ').replace(/\..+$/, ' UTC') : '—';
+    };
+
+    if (!history.exists) {
+        return `<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><title>היסטוריית עריכות</title><body style="font-family:system-ui,Arial,sans-serif;padding:2rem;">
+            <h1>הודעה ${esc(history.mid)} לא נמצאה</h1></body></html>`;
+    }
+
+    // Oldest version first (revisions are stored oldest→newest), then the
+    // current live version last, so the page reads top-to-bottom in time order.
+    const timeline = history.revisions.map((rev, index) => `
+        <li class="rev">
+            <div class="meta">גרסה ${index + 1} · הוחלפה ב-${esc(fmt(rev.replacedAt))} · עורך: ${esc(rev.editor.username)}</div>
+            <pre class="content">${esc(rev.content)}</pre>
+        </li>`).join('');
+
+    const currentBlock = `
+        <li class="rev current">
+            <div class="meta">גרסה נוכחית${history.current.edited ? ` · נערכה לאחרונה ${esc(fmt(history.current.edited))}` : ''}${history.current.deleted ? ' · מחוקה' : ''}</div>
+            <pre class="content">${esc(history.current.content)}</pre>
+        </li>`;
+
+    return `<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
+<title>היסטוריית עריכות · הודעה ${esc(history.mid)}</title>
+<style>
+    body { font-family: system-ui, Segoe UI, Arial, sans-serif; margin: 0; padding: 2rem; background: #f5f6f8; color: #1c1e21; }
+    h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+    .sub { color: #65676b; font-size: .875rem; margin-bottom: 1.5rem; }
+    ul { list-style: none; margin: 0; padding: 0; max-width: 780px; }
+    .rev { background: #fff; border: 1px solid #dcdfe3; border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1rem; }
+    .rev.current { border-color: #2d6cdf; box-shadow: 0 0 0 1px #2d6cdf33; }
+    .meta { font-size: .8rem; color: #65676b; margin-bottom: .5rem; }
+    .content { white-space: pre-wrap; word-break: break-word; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
+    @media (prefers-color-scheme: dark) {
+        body { background: #18191a; color: #e4e6eb; }
+        .rev { background: #242526; border-color: #3a3b3c; }
+        .meta, .sub { color: #b0b3b8; }
+    }
+</style>
+</head>
+<body>
+    <h1>היסטוריית עריכות · הודעה ${esc(history.mid)}</h1>
+    <div class="sub">מחבר: ${esc(history.author.username)} · חדר: ${esc(history.roomId)} · ${esc(history.revisionCount)} עריכות קודמות</div>
+    <ul>
+        ${history.revisionCount ? timeline : '<li class="rev"><div class="meta">אין עריכות קודמות מתועדות</div></li>'}
+        ${currentBlock}
+    </ul>
+</body>
+</html>`;
 }
 
 async function renderAdminChatsPage(req, res, next) {
@@ -969,55 +1204,40 @@ async function getPrivateRoomCount() {
 }
 
 async function getAdminRecentChats(uid, start, limit) {
-    const offset = Math.max(0, parseInt(start, 10) || 0);
-    const pageSize = Math.max(0, parseInt(limit, 10) || 0);
-    const allRoomIds = await db.getSortedSetRevRange('chat:rooms', 0, -1);
+    let cursor = Math.max(0, parseInt(start, 10) || 0);
+    const roomPairs = [];
 
-    if (!allRoomIds.length || !pageSize) {
-        return {
-            rooms: [],
-            nextStart: offset,
-        };
-    }
-
-    const allRooms = await Messaging.getRoomsData(allRoomIds);
-    const roomPairs = (await Promise.all(allRooms.map(async (room, index) => {
-        const roomId = parseInt(allRoomIds[index], 10) || 0;
-        if (!room || room.public || !roomId) {
-            return null;
+    while (roomPairs.length < limit) {
+        const roomIds = await db.getSortedSetRevRange('chat:rooms', cursor, cursor + ADMIN_CHAT_SCAN_SIZE - 1);
+        if (!roomIds.length) {
+            break;
         }
 
-        return {
-            roomId,
-            room,
-            lastActivity: await getAdminRoomLastActivity(roomId, room),
-        };
-    }))).filter(Boolean);
+        const rooms = await Messaging.getRoomsData(roomIds);
+        rooms.forEach((room, index) => {
+            if (room && !room.public && roomPairs.length < limit) {
+                roomPairs.push({
+                    roomId: roomIds[index],
+                    room,
+                });
+            }
+        });
 
-    roomPairs.sort((a, b) => (
-        b.lastActivity - a.lastActivity ||
-        b.roomId - a.roomId
-    ));
+        cursor += roomIds.length;
+        if (roomIds.length < ADMIN_CHAT_SCAN_SIZE) {
+            break;
+        }
+    }
 
-    const pagedRooms = roomPairs.slice(offset, offset + pageSize);
-    const rooms = pagedRooms.map(item => item.room);
-    const roomIds = pagedRooms.map(item => item.roomId);
+    const rooms = roomPairs.map(item => item.room);
+    const roomIds = roomPairs.map(item => item.roomId);
 
     await enrichAdminRecentRooms(uid, roomIds, rooms);
 
     return {
         rooms,
-        nextStart: offset + rooms.length,
+        nextStart: cursor,
     };
-}
-
-async function getAdminRoomLastActivity(roomId, room) {
-    const lastMessage = await db.getSortedSetRevRangeWithScores(`chat:room:${roomId}:mids`, 0, 0);
-    if (lastMessage.length) {
-        return parseInt(lastMessage[0].score, 10) || 0;
-    }
-
-    return parseInt(room && room.timestamp, 10) || 0;
 }
 
 async function enrichAdminRecentRooms(uid, roomIds, rooms) {
