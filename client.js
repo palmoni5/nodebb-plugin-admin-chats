@@ -223,8 +223,11 @@ $(document).ready(function() {
                     }
 
                     roomId = roomId || '';
-                    Chats.destroyAutoComplete(ajaxify.data.roomId);
-                    socket.emit('modules.chats.leave', ajaxify.data.roomId);
+                    // NodeBB 4.14.9+ (56c6115a61): destroyAutoComplete takes the input element, not a roomId
+                    Chats.destroyAutoComplete($('[component="chat/main-wrapper"]').find('[component="chat/input"]'));
+                    if (ajaxify.data.roomId) {
+                        socket.emit('modules.chats.leave', ajaxify.data.roomId);
+                    }
 
                     const url = getAdminChatsPageUrl(roomId);
                     fetch(getAdminChatsDataUrl(roomId), { credentials: 'include' })
@@ -245,12 +248,18 @@ $(document).ready(function() {
                             mainWrapper.find('[data-bs-toggle="tooltip"]').tooltip({ trigger: 'hover', container: '#content' });
                             Chats.setActive(roomId);
                             Chats.addEventListeners();
-                            $(window).trigger('action:chat.loaded');
+                            // Pass the container like core does — listeners (e.g. the emoji
+                            // plugin's chat button) resolve elements relative to it
+                            $(window).trigger('action:chat.loaded', $('.chats-full'));
                             if (roomId) {
                                 ChatsMessages.scrollToBottomAfterImageLoad(mainWrapper.find('[component="chat/message/content"]'));
                             }
                             if (history.pushState) {
-                                history.pushState({ url: url }, null, `${window.location.protocol}//${window.location.host}${config.relative_path || ''}/${url}`);
+                                const fullUrl = `${window.location.protocol}//${window.location.host}${config.relative_path || ''}/${url}`;
+                                // When the address bar already shows the target (e.g. closing a chat
+                                // after a back-gesture), replace instead of stacking a duplicate entry
+                                const sameUrl = window.location.href.split('?')[0] === fullUrl.split('?')[0];
+                                history[sameUrl ? 'replaceState' : 'pushState']({ url: url }, null, fullUrl);
                             }
                             bindAdminRecentChatsInfiniteScroll();
                         });
@@ -259,16 +268,29 @@ $(document).ready(function() {
                 Chats._adminAllChatsPatched = true;
             }
 
-            // Auto-open chat if roomId is specified in URL
+            // Auto-open chat if roomId is specified in URL and the room is not
+            // already rendered (server-side render sets data-roomid on the wrapper —
+            // re-switching in that case caused a visible list->chat flash on mobile)
             const currentRoomId = ajaxify && ajaxify.data && ajaxify.data.roomId;
-            if (currentRoomId && !$('body').hasClass('chat-loaded')) {
+            const activeChatId = $('[component="chat/main-wrapper"]').attr('data-roomid') || '';
+            if (currentRoomId && String(currentRoomId) !== String(activeChatId)) {
                 setTimeout(function() {
                     Chats.switchChat(currentRoomId);
                 }, 100);
+            } else {
+                syncChatLoadedState();
             }
 
             bindAdminRecentChatsInfiniteScroll();
         });
+    }
+
+    // Keep the mobile layout state (body.chat-loaded / nav data-loaded) in sync with
+    // the room that is actually rendered, without re-fetching it
+    function syncChatLoadedState() {
+        const activeChatId = parseInt($('[component="chat/main-wrapper"]').attr('data-roomid'), 10) || 0;
+        $('body').toggleClass('chat-loaded', !!activeChatId);
+        $('[component="chat/nav-wrapper"]').attr('data-loaded', activeChatId ? '1' : '0');
     }
 
     function replaceAdminEmptyStateText() {
@@ -675,9 +697,10 @@ $(document).ready(function() {
             patchForumChatsForAdminAll();
             bindAdminRecentChatsInfiniteScroll();
             
-            // Auto-open chat if roomId is specified in URL and chat is not already loaded
+            // Auto-open chat if roomId is specified in URL and that room is not already rendered
             const currentRoomId = ajaxify && ajaxify.data && ajaxify.data.roomId;
-            if (currentRoomId && !$('body').hasClass('chat-loaded')) {
+            const activeChatId = $('[component="chat/main-wrapper"]').attr('data-roomid') || '';
+            if (currentRoomId && String(currentRoomId) !== String(activeChatId)) {
                 setTimeout(function() {
                     require(['forum/chats'], function(Chats) {
                         if (Chats && Chats.switchChat) {
@@ -685,6 +708,8 @@ $(document).ready(function() {
                         }
                     });
                 }, 200);
+            } else {
+                syncChatLoadedState();
             }
         }
 
@@ -718,6 +743,8 @@ $(document).ready(function() {
                         }
                     });
                 }, 100);
+            } else {
+                syncChatLoadedState();
             }
         }
         refreshChatUi();
@@ -776,32 +803,28 @@ $(document).ready(function() {
         }
     });
 
-    // Handle URL changes for internal navigation
+    // Handle URL changes for internal navigation (including back/forward gestures).
+    // The URL is the source of truth here — ajaxify.data.roomId is stale after popstate.
     function handleChatNavigation() {
         if (!isAdminAllChatsPage()) {
             return;
         }
-        
-        // Try to get roomId from multiple sources
-        let currentRoomId = ajaxify && ajaxify.data && ajaxify.data.roomId;
-        
-        // If not found in ajaxify.data, try to extract from URL
-        if (!currentRoomId) {
-            const urlMatch = window.location.pathname.match(/\/chats\/(\d+)/);
-            if (urlMatch) {
-                currentRoomId = parseInt(urlMatch[1], 10);
+
+        const urlMatch = window.location.pathname.match(/\/chats\/(\d+)/);
+        const urlRoomId = urlMatch ? parseInt(urlMatch[1], 10) : 0;
+        const activeChatId = parseInt($('[component="chat/main-wrapper"]').attr('data-roomid'), 10) || 0;
+
+        if (urlRoomId === activeChatId) {
+            return;
+        }
+
+        require(['forum/chats'], function(Chats) {
+            if (Chats && Chats.switchChat) {
+                // urlRoomId 0 -> URL is the chat list: close the open chat and show the list
+                // (previously a back-gesture out of a chat left the chat stuck on screen)
+                Chats.switchChat(urlRoomId || '');
             }
-        }
-        
-        const activeChatId = $('[component="chat/main-wrapper"]').attr('data-roomid');
-        
-        if (currentRoomId && (!activeChatId || activeChatId !== String(currentRoomId))) {
-            require(['forum/chats'], function(Chats) {
-                if (Chats && Chats.switchChat) {
-                    Chats.switchChat(currentRoomId);
-                }
-            });
-        }
+        });
     }
 
     $(document).on('click', '[data-action="delete"], [data-action="restore"]', function() {
