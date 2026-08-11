@@ -244,11 +244,21 @@ $(document).ready(function() {
                         mainWrapper.find('[data-bs-toggle="tooltip"]').tooltip({ trigger: 'hover', container: '#content' });
                         Chats.setActive(roomId);
                         Chats.addEventListeners();
-                        // Pass the container like core does — listeners (e.g. the emoji
-                        // plugin's chat button) resolve elements relative to it
-                        $(window).trigger('action:chat.loaded', $('.chats-full'));
+                        // Fire through the hooks module like core does — a raw jQuery
+                        // trigger never reaches hooks.on() listeners (e.g. the reactions
+                        // plugin), only legacy $(window).on() ones (e.g. the emoji plugin).
+                        // hooks.fire invokes both kinds and passes the container.
+                        require(['hooks'], function(hooks) {
+                            hooks.fire('action:chat.loaded', $('.chats-full'));
+                        });
                         if (roomId) {
                             ChatsMessages.scrollToBottomAfterImageLoad(mainWrapper.find('[component="chat/message/content"]'));
+                            // Core only marks a room read when its list element carries the
+                            // "unread" class — the admin list doesn't, so mark it explicitly
+                            require(['api'], function(api) {
+                                api.del(`/chats/${roomId}/state`, {}).catch(function() {});
+                            });
+                            $('[component="chat/nav-wrapper"]').find(`[data-roomid="${roomId}"]`).removeClass('unread');
                         }
                         if (history.pushState) {
                             const fullUrl = `${window.location.protocol}//${window.location.host}${config.relative_path || ''}/${url}`;
