@@ -253,11 +253,8 @@ $(document).ready(function() {
                         });
                         if (roomId) {
                             ChatsMessages.scrollToBottomAfterImageLoad(mainWrapper.find('[component="chat/message/content"]'));
-                            // Core only marks a room read when its list element carries the
-                            // "unread" class — the admin list doesn't, so mark it explicitly
-                            require(['api'], function(api) {
-                                api.del(`/chats/${roomId}/state`, {}).catch(function() {});
-                            });
+                            // Read-state is now cleared server-side when the room payload is
+                            // built; just keep the list UI in sync
                             $('[component="chat/nav-wrapper"]').find(`[data-roomid="${roomId}"]`).removeClass('unread');
                         }
                         if (history.pushState) {

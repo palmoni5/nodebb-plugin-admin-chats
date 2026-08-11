@@ -790,15 +790,17 @@ function registerRoutes(app, router, middleware) {
 
     const pageController = async (req, res, next) => {
         try {
-            // If user is not allowed, redirect to user-specific chat URL
+            // Users without admin-chats access get core's behaviour: redirect to
+            // their own chats page (helpers.redirect also handles API/ajaxify
+            // requests via X-Redirect, so navigation works in one hop)
             if (req.uid && !await canAccessAdminChats(req.uid)) {
                 const userSlug = await User.getUserField(req.uid, 'userslug');
-                if (userSlug && req.params.roomId) {
-                    const redirectUrl = `${req.baseUrl || ''}/user/${userSlug}/chats/${req.params.roomId}${req.params.index ? `/${req.params.index}` : ''}`;
-                    return res.redirect(redirectUrl);
+                if (userSlug) {
+                    const suffix = req.params.roomId ? `/${req.params.roomId}${req.params.index ? `/${req.params.index}` : ''}` : '';
+                    return helpers.redirect(res, `/user/${userSlug}/chats${suffix}`);
                 }
             }
-            
+
             await renderAdminChatsPage(req, res, next);
         } catch (err) {
             next(err);
@@ -807,6 +809,13 @@ function registerRoutes(app, router, middleware) {
 
     const pageRouter = app || router;
     pageRouter.get('/chats/:roomId?/:index?', middleware.busyCheck, pageMiddlewares, middleware.buildHeader, pageController);
+    // Also own the page-API route. Without it, ajaxify entry into /chats/<roomId>
+    // (e.g. picking a room from the mobile chat dropdown) hit core's redirect
+    // route and bounced through an extra hop before the room finally rendered —
+    // showing the chat list in between. Registered on the core router before
+    // core's own routes, and covered by middleware.prepareAPI (mounted earlier),
+    // so res.render answers with ajaxify JSON in a single round-trip.
+    router.get('/api/chats/:roomId?/:index?', pageMiddlewares, pageController);
 
     router.get('/api/admin-chats', ...routeMiddleware, async (req, res) => {
         try {
@@ -1188,6 +1197,16 @@ async function buildAdminChatRoomPayload(uid, roomId, indexParam) {
 
     if (!room) {
         return null;
+    }
+
+    // Root fix for "message stays unread": core only clears unread state from the
+    // client when the room's nav element carries the `unread` class, which the
+    // admin list never sets. Mark the room read for the viewer on every load.
+    try {
+        await Messaging.markRead(uid, roomId);
+        await Messaging.pushUnreadCount(uid);
+    } catch (err) {
+        // never let read-state bookkeeping break room rendering
     }
 
     const [canViewInfo, canUploadImage, canUploadFile] = await privileges.global.can([
