@@ -230,38 +230,54 @@ $(document).ready(function() {
                     }
 
                     const url = getAdminChatsPageUrl(roomId);
+
+                    async function renderAdminChatWindow(payload) {
+                        const html = await app.parseAndTranslate('partials/chats/message-window', payload);
+                        const mainWrapper = $('[component="chat/main-wrapper"]');
+                        mainWrapper.html(html);
+                        mainWrapper.attr('data-roomid', roomId);
+                        html.find('.timeago').timeago();
+                        ajaxify.data = { ...ajaxify.data, ...payload, roomId: roomId };
+                        ajaxify.updateTitle(ajaxify.data.title);
+                        $('body').toggleClass('chat-loaded', !!roomId);
+                        $('[component="chat/nav-wrapper"]').attr('data-loaded', roomId ? '1' : '0');
+                        mainWrapper.find('[data-bs-toggle="tooltip"]').tooltip({ trigger: 'hover', container: '#content' });
+                        Chats.setActive(roomId);
+                        Chats.addEventListeners();
+                        // Pass the container like core does — listeners (e.g. the emoji
+                        // plugin's chat button) resolve elements relative to it
+                        $(window).trigger('action:chat.loaded', $('.chats-full'));
+                        if (roomId) {
+                            ChatsMessages.scrollToBottomAfterImageLoad(mainWrapper.find('[component="chat/message/content"]'));
+                        }
+                        if (history.pushState) {
+                            const fullUrl = `${window.location.protocol}//${window.location.host}${config.relative_path || ''}/${url}`;
+                            // When the address bar already shows the target (e.g. closing a chat
+                            // after a back-gesture), replace instead of stacking a duplicate entry
+                            const sameUrl = window.location.href.split('?')[0] === fullUrl.split('?')[0];
+                            history[sameUrl ? 'replaceState' : 'pushState']({ url: url }, null, fullUrl);
+                        }
+                        bindAdminRecentChatsInfiniteScroll();
+                    }
+
+                    if (!roomId) {
+                        // Closing a chat needs no server round-trip — render the empty
+                        // window from the data we already have (instant back-gesture)
+                        renderAdminChatWindow({ ...ajaxify.data, roomId: 0, title: '[[pages:chats]]' });
+                        return;
+                    }
+
                     fetch(getAdminChatsDataUrl(roomId), { credentials: 'include' })
                         .then(async function(response) {
                             if (!response.ok) {
                                 throw new Error(`Received ${response.status}`);
                             }
-
-                            const payload = await response.json();
-                            const html = await app.parseAndTranslate('partials/chats/message-window', payload);
-                            const mainWrapper = $('[component="chat/main-wrapper"]');
-                            mainWrapper.html(html);
-                            mainWrapper.attr('data-roomid', roomId);
-                            html.find('.timeago').timeago();
-                            ajaxify.data = { ...ajaxify.data, ...payload, roomId: roomId };
-                            ajaxify.updateTitle(ajaxify.data.title);
-                            $('body').toggleClass('chat-loaded', !!roomId);
-                            mainWrapper.find('[data-bs-toggle="tooltip"]').tooltip({ trigger: 'hover', container: '#content' });
-                            Chats.setActive(roomId);
-                            Chats.addEventListeners();
-                            // Pass the container like core does — listeners (e.g. the emoji
-                            // plugin's chat button) resolve elements relative to it
-                            $(window).trigger('action:chat.loaded', $('.chats-full'));
-                            if (roomId) {
-                                ChatsMessages.scrollToBottomAfterImageLoad(mainWrapper.find('[component="chat/message/content"]'));
-                            }
-                            if (history.pushState) {
-                                const fullUrl = `${window.location.protocol}//${window.location.host}${config.relative_path || ''}/${url}`;
-                                // When the address bar already shows the target (e.g. closing a chat
-                                // after a back-gesture), replace instead of stacking a duplicate entry
-                                const sameUrl = window.location.href.split('?')[0] === fullUrl.split('?')[0];
-                                history[sameUrl ? 'replaceState' : 'pushState']({ url: url }, null, fullUrl);
-                            }
-                            bindAdminRecentChatsInfiniteScroll();
+                            await renderAdminChatWindow(await response.json());
+                        })
+                        .catch(function() {
+                            // Never leave the user stuck on the list — fall back to a
+                            // regular ajaxify navigation to the room
+                            ajaxify.go(url);
                         });
                 };
 
@@ -375,7 +391,8 @@ $(document).ready(function() {
 
         // Try admin endpoint first if user has access
         if (hasAdminChatsAccess()) {
-            const adminEndpoint = `${config.relative_path || ''}/api/admin-chats/page/${roomId}`;
+            // switch=1: room data only — no need to rebuild the full room list here
+            const adminEndpoint = `${config.relative_path || ''}/api/admin-chats/page/${roomId}?switch=1`;
             try {
                 const adminResponse = await fetch(adminEndpoint, {
                     headers: {

@@ -847,7 +847,9 @@ function registerRoutes(app, router, middleware) {
                 return;
             }
 
-            const payload = await buildAdminChatsPayload(req);
+            const payload = await buildAdminChatsPayload(req, {
+                isSwitch: parseInt(req.query.switch, 10) === 1,
+            });
             res.json(payload);
         } catch (err) {
             res.status(500).json({ status: { code: 'error', message: err.message } });
@@ -1115,7 +1117,11 @@ async function assertAdminChatsAccess(req, res) {
     return true;
 }
 
-async function buildAdminChatsPayload(req) {
+async function buildAdminChatsPayload(req, options = {}) {
+    // Like core (controllers/accounts/chats.js): when the client only switches
+    // rooms (?switch=1 on the JSON endpoint), skip rebuilding the room list —
+    // scanning every chat room on each switch made room-opening slow on mobile
+    const isSwitch = !!options.isSwitch;
     const userslug = await User.getUserField(req.uid, 'userslug');
     const [isAdmin, canView, canManage] = await Promise.all([
         User.isAdministrator(req.uid),
@@ -1124,11 +1130,6 @@ async function buildAdminChatsPayload(req) {
     ]);
     const adminChatsManage = isAdmin || canManage;
     const adminChatsAccess = isAdmin || canView || canManage;
-    const [recentChats, publicRooms, privateRoomCount] = await Promise.all([
-        getAdminRecentChats(req.uid, 0, ADMIN_CHAT_PAGE_SIZE),
-        Messaging.getPublicRooms(req.uid, req.uid),
-        getPrivateRoomCount(),
-    ]);
 
     const payload = {
         title: '[[pages:chats]]',
@@ -1138,12 +1139,20 @@ async function buildAdminChatsPayload(req) {
         adminChatsAccess,
         adminChatsIsAdmin: isAdmin,
         adminChatsCanManage: adminChatsManage,
-        rooms: recentChats.rooms,
-        nextStart: recentChats.nextStart,
-        publicRooms: publicRooms || [],
-        privateRoomCount,
         bodyClasses: ['page-user-chats'],
     };
+
+    if (!isSwitch) {
+        const [recentChats, publicRooms, privateRoomCount] = await Promise.all([
+            getAdminRecentChats(req.uid, 0, ADMIN_CHAT_PAGE_SIZE),
+            Messaging.getPublicRooms(req.uid, req.uid),
+            getPrivateRoomCount(),
+        ]);
+        payload.rooms = recentChats.rooms;
+        payload.nextStart = recentChats.nextStart;
+        payload.publicRooms = publicRooms || [];
+        payload.privateRoomCount = privateRoomCount;
+    }
 
     const roomId = parseInt(req.params.roomId, 10) || 0;
     if (!roomId) {
