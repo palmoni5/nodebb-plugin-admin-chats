@@ -4,8 +4,11 @@
   "description": "A plugin that allows the administrator to view and manage user chats",
   "url": "https://github.com/palmoni5/nodebb-plugin-admin-chats",
   "library": "./library.js",
+  "templates": "templates",
   "scripts": [
-    "client.js"
+    "static/lib/switch-chat.js",
+    "static/lib/lock-toggle.js",
+    "static/lib/live-updates.js"
   ],
   "hooks": [
     {
@@ -59,10 +62,6 @@
     {
       "hook": "filter:chat.renameRoom",
       "method": "filterRenameRoom"
-    },
-    {
-      "hook": "filter:middleware.render",
-      "method": "addTemplateData"
     },
     {
       "hook": "filter:notifications.create",
