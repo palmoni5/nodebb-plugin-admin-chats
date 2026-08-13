@@ -47,7 +47,9 @@
 			{{{ if showUserInput }}}
 			<!-- IMPORT partials/chats/composer.tpl -->
 			{{{ else }}}
+			{{{ if adminChatLockedForViewer }}}
 			<div class="admin-chat-lock-banner alert alert-warning mb-2 text-center">{{tx("admin-chats:lock.banner")}}</div>
+			{{{ end }}}
 			{{{ end }}}
 		</div>
 
