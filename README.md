@@ -16,7 +16,13 @@ A professional administration plugin for NodeBB that allows administrators to mo
 ### Plugin Information
 * **Name**: Super Admin Chat Control
 * **ID**: `nodebb-plugin-admin-chats`
-* **Compatibility**: NodeBB version `^4.0.0`
+* **Compatibility**: NodeBB version `^4.0.0` (tested through 4.14)
+
+### Code Layout
+* `library.js` — thin entry point; wires together the modules below.
+* `lib/access.js`, `lib/lock.js`, `lib/history.js`, `lib/hooks.js`, `lib/routes.js`, `lib/overrides.js` — server-side logic, split by concern.
+* `templates/partials/chats/*.tpl` — overrides of core's chat partials (controls menu, message actions, empty state, recent-room list) so the lock UI, participants line and admin menu item render server-side instead of being built with client-side DOM manipulation.
+* `static/lib/switch-chat.js`, `static/lib/lock-toggle.js`, `static/lib/live-updates.js` — client-side: admin room routing, the lock/unlock click handler, and live updates pushed over a targeted socket event when a room's lock state changes.
 
 ### Permissions
 The plugin exposes two global permissions in the ACP:
@@ -63,12 +69,11 @@ The plugin overrides core messaging functions to ensure full administrative cont
 3. Restart NodeBB.
 
 ## Client-Side Support
-The plugin includes a `client.js` script that:
-* Detects the system language (English or Hebrew).
-* Dynamically injects action buttons into the account sub-links menu.
-* Adds an admin lock/unlock control to the chat UI.
-* Disables the composer for non-admin users when a room is locked.
-* Cleans up the chat UI empty states for a better admin experience.
+Lock state, the admin menu item, the empty-state copy and the participants line are all rendered server-side via the template overrides in `templates/partials/chats/`, using NodeBB's own translation system (`[[admin-chats:...]]` / `tx()`) — no client-side DOM injection or language sniffing. The `static/lib/` scripts handle the parts that have no server-side extension point:
+* Routing chat-room switches through the admin API when viewing the all-chats admin page (`static/lib/switch-chat.js`).
+* Wiring the lock/unlock menu item's click handler (`static/lib/lock-toggle.js`).
+* Pushing live updates to anyone with an affected room open, via a `event:admin-chats.roomLockChanged` socket broadcast, instead of polling (`static/lib/live-updates.js`).
+* Injecting the "View Chats" link into the profile action menu (`static/lib/profile-link.js`) — this one *is* DOM injection, and deliberately so: the account menu is a theme template (e.g. nodebb-theme-harmony's `partials/account/admin-menu.tpl`) with a hardcoded item list and no hook over it, unlike the chat templates above which core lets a plugin override by file path.
 
 ---
 *Developed by [palmoni5](https://github.com/palmoni5/nodebb-plugin-admin-chats).* 
