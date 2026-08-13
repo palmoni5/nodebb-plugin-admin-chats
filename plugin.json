@@ -8,11 +8,12 @@
   "scripts": [
     "static/lib/switch-chat.js",
     "static/lib/lock-toggle.js",
-    "static/lib/live-updates.js"
+    "static/lib/live-updates.js",
+    "static/lib/profile-link.js"
   ],
   "hooks": [
     {
-      "hook": "filter:user.accountMenu",
+      "hook": "filter:user.profileMenu",
       "method": "addProfileLink"
     },
     {

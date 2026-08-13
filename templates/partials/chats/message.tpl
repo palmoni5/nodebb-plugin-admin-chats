@@ -32,7 +32,7 @@
 				<div class="btn-group d-inline-block">
 					<button class="btn btn-sm btn-link dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><i class="fa fa-ellipsis" type="button"></i></button>
 					<ul class="dropdown-menu dropdown-menu-end p-1 text-sm list-unstyled" role="menu">
-						{{{ if (isAdminOrGlobalMod || (!config.disableChatMessageEditing && messages.self && !messages.adminChatLocked)) }}}
+						{{{ if (isAdminOrGlobalMod || (!config.disableChatMessageEditing && (messages.self && !messages.adminChatLocked))) }}}
 						<li>
 							<a href="#" class="dropdown-item rounded-1" data-action="edit" role="menuitem"><span class="d-inline-flex align-items-center gap-2"><i class="fa fa-fw fa-pencil text-muted"></i> {{tx("topic:edit")}}</span></a>
 						</li>
