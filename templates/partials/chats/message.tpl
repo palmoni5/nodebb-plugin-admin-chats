@@ -55,6 +55,11 @@
 						{{{ end }}}
 
 						{{{ if isAdminOrGlobalMod }}}
+						{{{ if messages.edited }}}
+						<li>
+							<a href="#" class="dropdown-item rounded-1 admin-chat-history-item" data-mid="{messages.messageId}" role="menuitem"><span class="d-inline-flex align-items-center gap-2"><i class="fa fa-fw fa-history text-muted"></i> {{tx("admin-chats:history.title")}}</span></a>
+						</li>
+						{{{ end }}}
 						<li>
 							<a href="#" class="dropdown-item rounded-1 chat-ip-button" role="menuitem">
 								<span class="d-inline-flex align-items-center gap-2 show"><i class="fa fa-fw fa-info-circle text-muted"></i> {{tx("modules:chat.show-ip")}}</span>

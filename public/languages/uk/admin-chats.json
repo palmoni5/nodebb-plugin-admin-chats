@@ -8,5 +8,15 @@
   "errors.lockedAction": "Цю дію не можна виконати в блокованій кімнаті.",
   "admin-chats-view": "Переглянути всі чати",
   "admin-chats-manage": "Керувати чат-кімнатами",
-  "participants": "Учасники"
+  "participants": "Учасники",
+  "history.title": "Edit History",
+  "history.current": "Current version",
+  "history.revisionCount": "%1 previous edits",
+  "history.deleteRevision": "Delete version",
+  "history.confirmDelete": "Permanently delete this version?",
+  "history.deleted": "Version deleted",
+  "errors.history": "Unable to load or update the edit history.",
+  "history.restore": "Restore version",
+  "history.restored": "Message restored to the selected version",
+  "history.restoreDescription": "Restoring sets the selected version as the current one; the replaced version is kept in the history."
 }

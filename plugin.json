@@ -9,7 +9,8 @@
     "static/lib/switch-chat.js",
     "static/lib/lock-toggle.js",
     "static/lib/live-updates.js",
-    "static/lib/profile-link.js"
+    "static/lib/profile-link.js",
+    "static/lib/message-history.js"
   ],
   "hooks": [
     {

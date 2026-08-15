@@ -8,5 +8,15 @@
   "errors.lockedAction": "Esta ação não pode ser realizada em uma sala bloqueada.",
   "admin-chats-view": "Ver todos os chats",
   "admin-chats-manage": "Gerenciar salas de chat",
-  "participants": "Participantes"
+  "participants": "Participantes",
+  "history.title": "Edit History",
+  "history.current": "Current version",
+  "history.revisionCount": "%1 previous edits",
+  "history.deleteRevision": "Delete version",
+  "history.confirmDelete": "Permanently delete this version?",
+  "history.deleted": "Version deleted",
+  "errors.history": "Unable to load or update the edit history.",
+  "history.restore": "Restore version",
+  "history.restored": "Message restored to the selected version",
+  "history.restoreDescription": "Restoring sets the selected version as the current one; the replaced version is kept in the history."
 }

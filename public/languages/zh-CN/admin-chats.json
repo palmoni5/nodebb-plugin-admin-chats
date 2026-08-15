@@ -8,5 +8,15 @@
   "errors.lockedAction": "锁定的聊天室无法执行此操作。",
   "admin-chats-view": "查看所有聊天",
   "admin-chats-manage": "管理聊天室",
-  "participants": "参与者"
+  "participants": "参与者",
+  "history.title": "Edit History",
+  "history.current": "Current version",
+  "history.revisionCount": "%1 previous edits",
+  "history.deleteRevision": "Delete version",
+  "history.confirmDelete": "Permanently delete this version?",
+  "history.deleted": "Version deleted",
+  "errors.history": "Unable to load or update the edit history.",
+  "history.restore": "Restore version",
+  "history.restored": "Message restored to the selected version",
+  "history.restoreDescription": "Restoring sets the selected version as the current one; the replaced version is kept in the history."
 }

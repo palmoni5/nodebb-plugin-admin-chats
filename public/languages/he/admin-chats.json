@@ -8,5 +8,15 @@
   "errors.lockedAction": "לא ניתן לבצע פעולה זו בחדר נעול",
   "admin-chats-view": "צפיה בכל הצ'אטים",
   "admin-chats-manage": "ניהול חדרי צ'אט",
-  "participants": "משתתפים"
+  "participants": "משתתפים",
+  "history.title": "היסטוריית עריכות",
+  "history.current": "גרסה נוכחית",
+  "history.revisionCount": "%1 עריכות קודמות",
+  "history.deleteRevision": "מחיקת גרסה",
+  "history.confirmDelete": "האם למחוק גרסה זו לצמיתות?",
+  "history.deleted": "הגרסה נמחקה",
+  "errors.history": "לא ניתן לטעון או לעדכן את היסטוריית העריכות.",
+  "history.restore": "שחזור גרסה",
+  "history.restored": "ההודעה שוחזרה לגרסה שנבחרה",
+  "history.restoreDescription": "שחזור יציב את תוכן הגרסה שנבחרה כגרסה הנוכחית; הגרסה שהוחלפה תישמר בהיסטוריה."
 }
