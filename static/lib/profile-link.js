@@ -28,7 +28,18 @@ $(document).ready(function () {
         }
     }
 
+    // Drop everything a previous run of this function left behind. Runs can
+    // overlap (ajaxify.end may fire more than once per page) and each one
+    // awaits, so without this a bail-out — or a second run — leaves an orphan
+    // gear button on the page.
+    function removePreviousInjection() {
+        $('.admin-chats-privileges-menu').remove();
+        $('.admin-chats-profile-link, .admin-chats-profile-divider').remove();
+    }
+
     async function injectProfileChatsLink() {
+        removePreviousInjection();
+
         const isUserProfile = $('.account').length && window.location.pathname.includes('/user/');
         if (!isUserProfile || !await resolveAdminChatsAccess()) {
             return;
@@ -36,6 +47,15 @@ $(document).ready(function () {
 
         const userSlug = ajaxify && ajaxify.data && (ajaxify.data.userslug || (ajaxify.data.user && ajaxify.data.user.userslug));
         if (!userSlug) {
+            return;
+        }
+
+        // Own profile: /user/<self>/chats is just the regular chat list, so the
+        // moderation entry point has nothing to add there. Harmony doesn't
+        // render its own gear menu here either ({{{ if !isSelf }}}), so bailing
+        // out has to leave no button behind at all.
+        const profileUid = parseInt(ajaxify.data.uid || (ajaxify.data.user && ajaxify.data.user.uid), 10);
+        if (profileUid && parseInt(app.user.uid, 10) === profileUid) {
             return;
         }
 
@@ -56,11 +76,13 @@ $(document).ready(function () {
             </li>
         `;
 
-        let menu = $('.account-sub-links');
+        const menu = $('.account-sub-links').first();
         if (!menu.length) {
             // No admin/ban/mute menu was rendered for this viewer (they only
             // hold the admin-chats privilege) — build a minimal dropdown of
-            // our own next to the other profile action buttons.
+            // our own next to the other profile action buttons. The item goes
+            // in before the dropdown is attached, so a half-built gear can
+            // never end up on the page.
             const container = $('.account .flex-shrink-0.d-flex.gap-1').first();
             const fallbackContainer = container.length ? container : $('.account .flex-shrink-0').first();
 
@@ -70,14 +92,10 @@ $(document).ready(function () {
                         <button type="button" class="btn btn-light dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                             <i class="fa fa-gear fa-fw"></i>
                         </button>
-                        <ul class="dropdown-menu dropdown-menu-end p-1 text-sm account-sub-links" role="menu"></ul>
+                        <ul class="dropdown-menu dropdown-menu-end p-1 text-sm account-sub-links" role="menu">${menuItemHtml}</ul>
                     </div>
                 `);
-                menu = fallbackContainer.find('.account-sub-links').last();
             }
-        }
-
-        if (!menu.length) {
             return;
         }
 
