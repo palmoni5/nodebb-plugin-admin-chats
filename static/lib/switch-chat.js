@@ -192,6 +192,12 @@ $(document).ready(function () {
         if (!isAdminAllChatsPage()) {
             return;
         }
+        // On back/forward away from the chats page ajaxify.data still describes the chats
+        // page until the next page finishes loading. Without this check the room list is
+        // "switched" to and /chats is pushed on top of the page the user is navigating to.
+        if (!/\/chats(\/|$)/.test(window.location.pathname)) {
+            return;
+        }
 
         const urlMatch = window.location.pathname.match(/\/chats\/(\d+)/);
         const urlRoomId = urlMatch ? parseInt(urlMatch[1], 10) : 0;
