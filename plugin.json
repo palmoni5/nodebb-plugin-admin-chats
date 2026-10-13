@@ -11,7 +11,8 @@
     "static/lib/delete-room.js",
     "static/lib/live-updates.js",
     "static/lib/profile-link.js",
-    "static/lib/message-history.js"
+    "static/lib/message-history.js",
+    "static/lib/chat-search.js"
   ],
   "hooks": [
     {
